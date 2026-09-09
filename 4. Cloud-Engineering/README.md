@@ -41,8 +41,13 @@
 
 ---
 
+> 🎯 **[Common Interview Questions →](#common-interview-questions)** &nbsp;·&nbsp; 50 Cloud Engineering interview questions (10 Easy · 20 Medium · 20 Hard) for DevOps / Cloud Engineer roles.
+
+---
+
 ## Table of Contents
 
+- [Common Interview Questions](#common-interview-questions)
 - [Introduction](#introduction)
 - [Command Note Template](#command-note-template)
 - [Cloud Computing Models](#cloud-computing-models)
@@ -9308,6 +9313,747 @@ Never expose a function URL with `AuthType: NONE` without validating the caller 
 → [Lambda Security Best Practices](https://docs.aws.amazon.com/lambda/latest/dg/best-practices.html)
 
 → [Lambda Power Tuning — open source tool](https://github.com/alexcasalboni/aws-lambda-power-tuning)
+
+---
+
+## Common Interview Questions
+
+**50 commonly asked Cloud Engineering interview questions** — every answer written from a **DevOps / Cloud Engineer interview perspective**: production scenarios, AWS/cloud context, the follow-ups interviewers drill into, and the mistakes candidates make. Grouped as **10 Easy** (junior), **20 Medium** (mid-level), **20 Hard** (senior/SRE).
+
+---
+
+### Easy (Junior Level)
+
+**1. What is cloud computing? Name the key benefits.**
+
+Cloud computing is the delivery of computing resources (servers, storage, databases, networking, software) over the internet on a **pay-as-you-go** basis instead of owning and maintaining physical hardware.
+
+| Benefit | What it means |
+|---------|--------------|
+| On-demand self-service | Provision resources in minutes, no procurement tickets |
+| Elasticity | Scale up/down automatically with demand |
+| Pay-per-use | No upfront CapEx — convert to OpEx |
+| Global reach | Deploy in multiple regions in minutes |
+| High availability | Built-in redundancy across Availability Zones |
+| Managed services | Offload patching, backups, HA to the provider |
+
+**Why DevOps interviewers care:** They want to hear you connect cloud benefits to real outcomes — "elasticity" means your Auto Scaling Group adds nodes during a traffic spike and removes them after, saving cost. "Global reach" means you deploy a read replica in `ap-southeast-1` to cut latency for Asian users. Abstract answers without production examples signal a lack of hands-on experience.
+
+**2. What are the differences between IaaS, PaaS, and SaaS?**
+
+| Model | You manage | Provider manages | Example |
+|-------|-----------|-----------------|---------|
+| IaaS | OS, runtime, app, data | Hardware, networking, virtualization | EC2, GCE, Azure VMs |
+| PaaS | App code, data | Everything else (OS, runtime, scaling) | Elastic Beanstalk, Heroku, App Engine |
+| SaaS | Nothing (just use it) | Everything | Gmail, Slack, Salesforce |
+
+**FaaS** (Functions as a Service) is a subset of PaaS: you only manage function code. AWS Lambda, Azure Functions, Google Cloud Functions.
+
+**DevOps angle:** In an interview, map your infrastructure to the right model. Running Kubernetes on EC2 = IaaS (you manage the nodes). EKS with Fargate = closer to PaaS (AWS manages the compute). The more you manage, the more control but also more operational burden. Interviewers test whether you can justify *why* you chose a model for a given workload.
+
+**3. What is an AWS Region and an Availability Zone?**
+
+- **Region:** A geographic area (e.g., `us-east-1`, `ap-south-1`) containing multiple isolated data center clusters. Each Region is fully independent.
+- **Availability Zone (AZ):** One or more discrete data centers within a Region, each with independent power, cooling, and networking. Connected via low-latency links.
+
+A Region typically has 3 AZs (some have 2 or 6).
+
+**DevOps angle:** Multi-AZ is the minimum for production — an ALB across 2+ AZs, RDS Multi-AZ for database failover, ASG spanning AZs. Single-AZ = single point of failure. Region selection factors: latency to users, compliance (data residency), service availability, and cost (US regions are generally cheapest). A common interview question: *"Your app is in us-east-1 and an AZ goes down — what happens?"* — if you're multi-AZ, traffic shifts automatically.
+
+**4. What is the AWS Free Tier?**
+
+AWS Free Tier offers three types of free usage:
+
+| Type | Duration | Example |
+|------|----------|---------|
+| Always Free | Never expires | 1M Lambda requests/month, 25 GB DynamoDB storage |
+| 12-Month Free | First year after signup | 750 hrs/month t2.micro EC2, 5 GB S3 |
+| Trials | Short-term per service | 60 days of Amazon Inspector |
+
+**DevOps angle:** The Free Tier is for learning and prototyping, not production. The #1 mistake: leaving resources running after experimenting. Set up **AWS Budgets** alerts ($1 threshold) and enable **Free Tier usage alerts** in Billing. An EC2 instance with an unattached Elastic IP still costs money. Interviewers ask: *"How would you prevent unexpected charges on a new AWS account?"* — Budgets, alerts, and IAM policies restricting expensive services.
+
+**5. What is IAM and why is it important?**
+
+IAM (Identity and Access Management) controls **who** (authentication) can do **what** (authorization) on **which** AWS resources.
+
+Core components:
+- **Users** — individual identities with long-term credentials
+- **Groups** — collections of users sharing the same permissions
+- **Roles** — temporary credentials assumed by users, services, or applications
+- **Policies** — JSON documents defining permissions (Allow/Deny on Actions for Resources)
+
+**DevOps angle:** IAM is the first thing you configure on any AWS account. The root account should have MFA and no access keys. Every human gets a unique IAM user (or SSO identity). Every service (EC2, Lambda, ECS task) gets an IAM Role — never hardcode credentials. Interviewers test: *"An EC2 instance needs to read from S3 — how?"* → Attach an IAM Role with an S3 read policy to the instance, never store keys on the instance.
+
+**6. What is Amazon S3?**
+
+Amazon S3 (Simple Storage Service) is an **object storage** service with 99.999999999% (11 nines) durability. It stores data as objects in buckets.
+
+- **Object** = file + metadata + key (unique identifier within a bucket)
+- **Bucket** = container for objects (globally unique name, created in a specific Region)
+- **Flat namespace** — no real directories; prefixes (`images/photo.jpg`) simulate folders
+
+**DevOps angle:** S3 is the backbone of AWS — Terraform state backend, CloudTrail logs, ALB access logs, static website hosting, Docker image layers (ECR uses S3), Lambda deployment packages. Interviewers ask about **S3 security**: bucket policies, ACLs, Block Public Access (should be ON by default), and encryption (SSE-S3, SSE-KMS, or client-side).
+
+**7. What is an EC2 instance?**
+
+EC2 (Elastic Compute Cloud) is a virtual server in the cloud. You choose the OS (AMI), instance type (CPU/RAM), storage (EBS), and networking (VPC/subnet/security group).
+
+Key concepts:
+- **AMI** — template containing the OS and pre-installed software
+- **Instance type** — hardware spec (e.g., `t3.medium` = 2 vCPU, 4 GB RAM)
+- **Security Group** — virtual firewall controlling inbound/outbound traffic
+- **Key Pair** — SSH public/private key for login
+
+**DevOps angle:** EC2 is IaaS — you manage the OS, patches, and everything above. For production: use Launch Templates (not manual launches), put instances in private subnets behind an ALB, automate with ASG. Never SSH into production manually — use SSM Session Manager (no open port 22 needed). Interviewers ask: *"Your EC2 instance is unreachable — how do you troubleshoot?"* → Security group rules, NACL, route table, instance status checks, OS-level firewall.
+
+**8. What is a Security Group in AWS?**
+
+A Security Group is a **stateful virtual firewall** at the instance (ENI) level.
+
+| Aspect | Security Group | NACL |
+|--------|---------------|------|
+| Level | Instance (ENI) | Subnet |
+| Stateful | Yes — return traffic auto-allowed | No — must explicitly allow return traffic |
+| Rules | Allow only (implicit deny) | Allow and Deny |
+| Evaluation | All rules evaluated together | Rules evaluated in order (lowest number first) |
+
+**DevOps angle:** Security Groups are your primary network control in AWS. Best practice: least privilege — allow only the ports and sources needed. Reference other Security Groups instead of IP ranges where possible (e.g., ALB SG → App SG → DB SG chain). A common mistake: opening `0.0.0.0/0` on port 22. Interviewers ask: *"Your app can't connect to RDS — what do you check?"* → The app's SG must allow outbound to port 3306, and the RDS SG must allow inbound from the app's SG.
+
+**9. What is the difference between a public and private subnet in a VPC?**
+
+| Aspect | Public Subnet | Private Subnet |
+|--------|--------------|----------------|
+| Route table | Has route to Internet Gateway (`0.0.0.0/0 → igw`) | No IGW route |
+| Public IP | Instances can have public/Elastic IPs | No direct internet access |
+| Use case | ALBs, bastion hosts, NAT Gateways | App servers, databases, internal services |
+| Outbound internet | Direct via IGW | Via NAT Gateway in a public subnet |
+
+**DevOps angle:** Production pattern: ALB in public subnets, app instances in private subnets, RDS in private subnets (ideally in a dedicated DB subnet group). Nothing except the load balancer and NAT Gateway should be in a public subnet. Interviewers ask: *"How does an EC2 instance in a private subnet pull Docker images from Docker Hub?"* → Through a NAT Gateway, or better: use VPC endpoints for ECR to avoid NAT Gateway data charges entirely.
+
+**10. What are the main ways to access AWS services?**
+
+| Method | Use case |
+|--------|---------|
+| Management Console | Web UI — learning, ad-hoc tasks, visual dashboards |
+| AWS CLI | Scripting, automation, terminal workflows |
+| AWS SDKs | Application-level integration (Python boto3, JS SDK, Go SDK) |
+| CloudShell | Browser-based shell with CLI pre-installed, no local setup |
+| REST APIs | Direct HTTP calls (SDKs and CLI wrap these) |
+| IaC (Terraform, CloudFormation, CDK) | Infrastructure automation and version control |
+
+**DevOps angle:** Console for exploring, CLI for scripting, IaC for everything in production. Never make manual Console changes to production — they drift from your IaC state and cause incidents. Interviewers expect: *"How do you manage AWS infrastructure?"* → Terraform/CloudFormation in Git, CI/CD pipeline applies changes, state locked in S3 + DynamoDB.
+
+---
+
+### Medium (Mid-Level)
+
+**11. Explain the AWS Shared Responsibility Model.**
+
+AWS and the customer split security responsibilities:
+
+| AWS responsibility ("Security OF the cloud") | Customer responsibility ("Security IN the cloud") |
+|----------------------------------------------|--------------------------------------------------|
+| Physical data centers, hardware | Data encryption, at rest and in transit |
+| Hypervisor, host OS | IAM users, roles, policies |
+| Network infrastructure | Security Groups, NACLs, OS patching (EC2) |
+| Managed service infrastructure | Application code, dependencies |
+| Global infrastructure (Regions, AZs, Edge) | Firewall rules, backup configuration |
+
+The line shifts by service: EC2 (IaaS) — you patch the OS. RDS (managed) — AWS patches the DB engine. Lambda (serverless) — AWS manages everything below your code.
+
+**DevOps angle:** Interviewers use this to test whether you understand what you're responsible for. *"Who patches the OS on an RDS instance?"* → AWS. *"Who patches the OS on an EC2 instance?"* → You. *"Who's responsible if your S3 bucket is public?"* → You — AWS provides the tools (Block Public Access), but you must enable them.
+
+**12. What are IAM Policies and how do they work?**
+
+IAM Policies are JSON documents that define permissions:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [{
+    "Effect": "Allow",
+    "Action": "s3:GetObject",
+    "Resource": "arn:aws:s3:::my-bucket/*"
+  }]
+}
+```
+
+Types:
+- **AWS Managed** — pre-built by AWS (e.g., `AmazonS3ReadOnlyAccess`)
+- **Customer Managed** — you create and maintain
+- **Inline** — embedded directly in a user/group/role (avoid — hard to audit)
+
+**DevOps angle:** Always use customer managed policies over inline. Use conditions for extra security: `"Condition": {"IpAddress": {"aws:SourceIp": "10.0.0.0/8"}}`. The principle of least privilege: start with zero permissions, add only what's needed. Interviewers ask: *"A developer says they need S3 access — what do you do?"* → Ask which bucket, which operations, create a scoped policy — never attach `AdministratorAccess`.
+
+**13. What is the difference between IAM Users, Groups, and Roles?**
+
+| Entity | Credentials | Lifespan | Use case |
+|--------|------------|----------|----------|
+| User | Long-term (password, access keys) | Permanent until deleted | Individual humans |
+| Group | None (inherits from attached policies) | Permanent | Organize users by job function |
+| Role | Temporary (STS tokens, 1-12 hrs) | Assumed on demand | Services, cross-account, federation |
+
+**DevOps angle:** Roles are the answer to almost every AWS auth question in interviews. EC2 → Role (instance profile). Lambda → Execution role. ECS task → Task role. Cross-account access → Role with trust policy. CI/CD (GitHub Actions) → OIDC federation + Role. If someone says "put access keys on the server," that's a red flag — always use roles. Interviewers test: *"How does a Lambda function write to DynamoDB?"* → Lambda execution role with `dynamodb:PutItem` permission.
+
+**14. What are S3 storage classes and when do you use each?**
+
+| Storage Class | Access Pattern | Durability | Availability | Cost |
+|--------------|---------------|------------|-------------|------|
+| S3 Standard | Frequent | 11 nines | 99.99% | $$$ |
+| S3 Intelligent-Tiering | Unknown/changing | 11 nines | 99.9% | Auto-optimized |
+| S3 Standard-IA | Infrequent (>30 days) | 11 nines | 99.9% | $$ (retrieval fee) |
+| S3 One Zone-IA | Infrequent, non-critical | 11 nines | 99.5% | $ (single AZ) |
+| S3 Glacier Instant | Archive, instant access | 11 nines | 99.9% | $ |
+| S3 Glacier Flexible | Archive, mins-hours | 11 nines | 99.99% | ¢ |
+| S3 Glacier Deep Archive | Compliance, 12hr retrieval | 11 nines | 99.99% | ¢¢ |
+
+**DevOps angle:** Use **S3 Lifecycle Policies** to automatically transition objects: Standard → IA after 30 days → Glacier after 90 → Deep Archive after 365. This is a cost-optimization question interviewers love. Application logs, CloudTrail logs, and old backups are classic lifecycle candidates. Intelligent-Tiering works well when you genuinely can't predict access patterns.
+
+**15. What are EC2 instance types and how do you choose one?**
+
+Instance types follow the pattern: `<family><generation>.<size>` (e.g., `m6i.xlarge`).
+
+| Family | Optimized for | Example use case |
+|--------|--------------|-----------------|
+| t3/t4g | Burstable general purpose | Dev/test, small apps |
+| m6i/m7g | General purpose (balanced) | Web servers, app servers |
+| c6i/c7g | Compute | CI/CD builds, encoding, ML inference |
+| r6i/r7g | Memory | Databases, in-memory caches |
+| i3/i4i | Storage I/O | Elasticsearch, Cassandra |
+| p4/p5 | GPU | ML training, rendering |
+| g5 | Graphics | Game streaming, video |
+
+**DevOps angle:** Start with general purpose (`m` or `t`), then right-size based on CloudWatch metrics (CPU, memory). `t3` instances use CPU credits — fine for bursty workloads, but sustained high CPU burns through credits and throttles. Interviewers ask: *"Your app is CPU-bound during batch processing — which instance type?"* → `c` family. Graviton (`g` suffix like `m7g`) offers better price-performance for most workloads.
+
+**16. What is an AMI and how is it used?**
+
+An AMI (Amazon Machine Image) is a template containing the OS, application server, applications, and configurations needed to launch an EC2 instance.
+
+Types:
+- **AWS-provided** — Amazon Linux, Ubuntu, Windows Server
+- **Marketplace** — pre-configured third-party AMIs
+- **Custom** — your own golden image with your software baked in
+
+**DevOps angle:** Custom AMIs are the foundation of immutable infrastructure. Pattern: build an AMI with Packer (install app, harden OS, configure agents) → store in AMI registry → reference in Launch Template → ASG launches identical instances every time. This eliminates configuration drift. Interviewers ask: *"How do you ensure all your EC2 instances are identically configured?"* → Packer-built AMI + Launch Template + ASG. Avoid snowflake servers that were manually configured.
+
+**17. What is EBS and how does it differ from instance store?**
+
+| Feature | EBS (Elastic Block Store) | Instance Store |
+|---------|--------------------------|----------------|
+| Persistence | Persists independently of instance | Lost when instance stops/terminates |
+| Snapshot | Yes — backed to S3 | No |
+| Size | Up to 64 TiB | Fixed by instance type |
+| Performance | gp3: 3000-16000 IOPS; io2: up to 256K IOPS | Very high (NVMe local SSD) |
+| Use case | Boot volumes, databases, persistent data | Temporary scratch, caches, buffers |
+
+EBS volume types: **gp3** (general SSD — default), **io2** (high-performance SSD — databases), **st1** (throughput HDD — big data), **sc1** (cold HDD — archives).
+
+**DevOps angle:** gp3 is the default choice — it decouples IOPS and throughput from size (unlike gp2). For RDS and etcd, use io2 for consistent latency. Always enable **EBS encryption** by default in account settings. Enable **Delete on Termination = false** for critical volumes. Interviewers ask: *"Your database IOPS are maxed out — what do you do?"* → Check volume type, switch from gp3 to io2, or increase provisioned IOPS.
+
+**18. What is a Load Balancer? Explain ALB vs NLB.**
+
+| Feature | ALB (Application LB) | NLB (Network LB) |
+|---------|----------------------|-------------------|
+| Layer | L7 (HTTP/HTTPS) | L4 (TCP/UDP/TLS) |
+| Routing | Path, host, header, query string | Port-based |
+| Targets | IP, instance, Lambda | IP, instance, ALB |
+| WebSocket | Yes | Yes (passthrough) |
+| Static IP | No (use Global Accelerator) | Yes (Elastic IP per AZ) |
+| Latency | Higher (HTTP parsing) | Ultra-low |
+| Use case | Web apps, microservices, API routing | High-throughput, TCP services, gRPC |
+
+**DevOps angle:** ALB for most web workloads — path-based routing (`/api/*` → API service, `/static/*` → S3 via Lambda). NLB when you need static IPs, extreme throughput, or non-HTTP protocols. In Kubernetes: AWS Load Balancer Controller provisions ALB for Ingress and NLB for `Service type=LoadBalancer`. Interviewers ask: *"You need to expose a gRPC service — which LB?"* → NLB (or ALB with HTTP/2 and gRPC target group support).
+
+**19. What is Auto Scaling and how does it work?**
+
+Auto Scaling automatically adjusts the number of EC2 instances based on demand.
+
+Components:
+- **Launch Template** — defines what to launch (AMI, instance type, SG, user data)
+- **Auto Scaling Group (ASG)** — defines where and how many (VPC, subnets, min/max/desired)
+- **Scaling Policies** — defines when to scale (CloudWatch alarms, target tracking, schedules)
+
+Flow: CloudWatch alarm triggers → ASG adjusts desired count → new instances launch from Launch Template → register with Target Group → ALB sends traffic.
+
+**DevOps angle:** ASG minimum = your floor for availability. Desired = current running count. Maximum = cost ceiling. Always spread across multiple AZs. Interviewers ask: *"How do you handle a traffic spike?"* → Target Tracking policy on CPU (e.g., keep average CPU at 50%) — ASG adds instances when load increases, removes when it drops. Also mention **cooldown periods** to prevent thrashing.
+
+**20. What are Auto Scaling policies? Explain the types.**
+
+| Policy Type | How it works | Best for |
+|-------------|-------------|----------|
+| Target Tracking | Maintain a metric at a target value (e.g., CPU at 50%) | Most common, simple |
+| Step Scaling | Add/remove different amounts at different alarm thresholds | Granular control |
+| Simple Scaling | Add/remove a fixed amount on alarm, then wait for cooldown | Legacy — avoid |
+| Scheduled | Scale at specific times | Predictable patterns (business hours) |
+| Predictive | ML-based forecast of traffic patterns | Recurring spikes |
+
+**DevOps angle:** Target Tracking is the default recommendation — it handles both scale-out and scale-in. Step Scaling for: "add 2 at 60% CPU, add 5 at 80% CPU." Scheduled for: "scale to 10 instances at 9AM, back to 3 at 6PM." Interviewers ask: *"Your app has a traffic spike every Monday at 10AM — how do you prepare?"* → Scheduled scaling action before the spike + Target Tracking for unexpected surges.
+
+**21. What is AWS Lambda and when should you use it?**
+
+Lambda is a **serverless compute** service — you upload code, AWS runs it in response to events. No servers to manage, no OS to patch, auto-scales to zero.
+
+| Aspect | Detail |
+|--------|--------|
+| Runtime | Python, Node.js, Java, Go, .NET, Ruby, custom |
+| Max execution | 15 minutes |
+| Memory | 128 MB – 10,240 MB |
+| Triggers | API Gateway, S3, SQS, DynamoDB Streams, EventBridge, ALB |
+| Pricing | Per request ($0.20/1M) + per GB-second compute |
+
+**DevOps angle:** Lambda is ideal for event-driven, short-lived tasks: image resizing on S3 upload, Slack alerts from CloudWatch alarms, API backends, cron jobs (EventBridge schedule). Not ideal for: long-running tasks, stateful workloads, or sustained high-throughput (EC2/Fargate is cheaper). Interviewers ask: *"When would you NOT use Lambda?"* → Processes over 15 min, apps needing persistent connections (WebSocket state), workloads where cold start latency is unacceptable.
+
+**22. What is the difference between Reserved Instances and Savings Plans?**
+
+| Feature | Reserved Instances (RI) | Savings Plans |
+|---------|------------------------|---------------|
+| Commitment | Specific instance type + Region | $/hour spend commitment |
+| Flexibility | Convertible RI can change family | Compute SP covers EC2, Lambda, Fargate |
+| Term | 1 or 3 years | 1 or 3 years |
+| Discount | Up to 72% | Up to 66% |
+| Payment | All Upfront / Partial / No Upfront | Same |
+
+**DevOps angle:** Savings Plans are generally recommended over RIs for flexibility — if you switch from `m5.xlarge` to `m6i.xlarge`, a standard RI doesn't apply but a Compute Savings Plan does. Use **Cost Explorer RI/SP recommendations** to right-size. Interviewers ask: *"How do you reduce AWS costs by 40%?"* → Right-size instances (CloudWatch metrics), Savings Plans for baseline, Spot for stateless workloads, S3 lifecycle policies, NAT Gateway optimization.
+
+**23. What is Amazon RDS and what engines does it support?**
+
+RDS (Relational Database Service) is a **managed database service** — AWS handles provisioning, patching, backups, replication, and failover.
+
+Supported engines: **MySQL, PostgreSQL, MariaDB, Oracle, SQL Server, Aurora (MySQL/PostgreSQL-compatible)**.
+
+What RDS manages for you: hardware provisioning, OS patching, automated backups (35-day retention), Multi-AZ failover, read replicas, monitoring.
+
+**DevOps angle:** RDS vs self-managed on EC2 — RDS for most production workloads (less operational overhead). EC2-hosted DB only when you need OS-level access or an unsupported engine. Interviewers ask: *"Should you run PostgreSQL on EC2 or RDS?"* → RDS unless you need custom extensions, specific kernel tuning, or a version RDS doesn't support. The operational savings (automated backups, failover, patching) almost always outweigh the control trade-off.
+
+**24. What is Multi-AZ deployment in RDS?**
+
+Multi-AZ creates a **synchronous standby replica** in a different Availability Zone. On primary failure, RDS automatically fails over to the standby (typically 60-120 seconds). The DNS endpoint stays the same — applications reconnect automatically.
+
+- **Not** a read replica — standby is not accessible for reads
+- Synchronous replication — zero data loss on failover
+- Automatic failover on: instance failure, AZ failure, storage failure, network failure
+- Slightly higher write latency (synchronous commit to standby)
+
+**DevOps angle:** Multi-AZ is non-negotiable for production databases. Interviewers ask: *"Your RDS instance is in a single AZ and the AZ goes down — what happens?"* → Database is unavailable until the AZ recovers (hours). With Multi-AZ, automatic failover in ~1-2 minutes. The follow-up: *"Does your application need code changes for failover?"* → No, if it connects via the RDS DNS endpoint (not a hardcoded IP) and handles transient connection errors.
+
+**25. What are Read Replicas in RDS?**
+
+Read Replicas use **asynchronous replication** to create read-only copies of your database. Unlike Multi-AZ (HA), Read Replicas are for **performance** — offload read traffic.
+
+| Feature | Multi-AZ | Read Replica |
+|---------|----------|-------------|
+| Replication | Synchronous | Asynchronous |
+| Purpose | High availability (failover) | Read scaling |
+| Readable | No | Yes |
+| Cross-Region | No | Yes |
+| Max count | 1 standby | Up to 5 (15 for Aurora) |
+| Promotion | Automatic failover | Manual (becomes standalone) |
+
+**DevOps angle:** Pattern: application writes to primary, reads go to read replica(s) — requires application-level read/write splitting (or use a proxy like RDS Proxy or PgBouncer). Cross-region Read Replicas enable disaster recovery and low-latency reads for global users. Interviewers ask: *"Your database reads are at 90% CPU — how do you scale?"* → Add Read Replicas and route read traffic there.
+
+**26. What is CloudWatch and what does it monitor?**
+
+CloudWatch is AWS's **monitoring and observability** service: metrics, logs, alarms, dashboards, and events — all in one place.
+
+| Component | Purpose |
+|-----------|---------|
+| Metrics | Numeric time-series data (CPU, network, custom) |
+| Logs | Centralized log collection and search |
+| Alarms | Trigger actions when metrics cross thresholds |
+| Dashboards | Visual monitoring panels |
+| Log Insights | SQL-like query language for log analysis |
+| Events/EventBridge | React to state changes (EC2 state, API calls) |
+| Container Insights | EKS/ECS cluster and pod-level metrics |
+
+**DevOps angle:** CloudWatch is your first stop for any AWS debugging. EC2 default metrics: CPU, network, disk I/O, status checks — but **not memory or disk usage** (need CloudWatch Agent for those). Interviewers ask: *"Your EC2 instance shows low CPU but the app is slow — what do you check?"* → Memory (swap usage via CW Agent), disk I/O (EBS throughput), network (packet loss), and application-level metrics.
+
+**27. What is the difference between CloudWatch Metrics, Logs, and Alarms?**
+
+- **Metrics:** Numeric data points at regular intervals. Default: 5-min granularity (1-min with detailed monitoring). Custom metrics via `PutMetricData` or CW Agent.
+- **Logs:** Text log streams grouped into Log Groups. Sources: Lambda (automatic), EC2 (CW Agent), ECS, VPC Flow Logs, CloudTrail.
+- **Alarms:** Watch a metric, trigger when threshold is breached for N evaluation periods. Actions: SNS notification, ASG scaling, EC2 action (stop/terminate/recover).
+
+Alarm states: **OK → INSUFFICIENT_DATA → ALARM**.
+
+**DevOps angle:** Always set up alarms for: CPU > 80%, status check failures, 5xx error rate on ALB, RDS free storage < 10%. Use **composite alarms** (AND/OR of multiple alarms) to reduce noise. Interviewers ask: *"How do you get alerted when disk space is low on EC2?"* → Install CW Agent (collects disk_used_percent), create a custom metric alarm, send to SNS → PagerDuty/Slack.
+
+**28. What is the AWS CLI and how do you configure it?**
+
+The AWS CLI is a command-line tool for managing AWS services via terminal commands.
+
+```bash
+aws configure                    # set up credentials + default region
+aws configure --profile staging  # named profile for multi-account
+```
+
+Credentials resolution order: **CLI flags → Environment vars (`AWS_ACCESS_KEY_ID`) → `~/.aws/credentials` file → Instance profile (IAM Role) → ECS task role → SSO**.
+
+**DevOps angle:** In CI/CD, use IAM Roles (not access keys) via OIDC federation (GitHub Actions → `aws-actions/configure-aws-credentials`). On EC2, use instance profiles — the CLI automatically picks up Role credentials. `--output json | jq '.Reservations[].Instances[].InstanceId'` is a common pattern for scripting. Interviewers ask: *"How do you manage credentials for CLI access across multiple AWS accounts?"* → AWS SSO + named profiles, or `aws sts assume-role` for cross-account.
+
+**29. What are Lambda Layers and why are they useful?**
+
+A Lambda Layer is a ZIP archive containing libraries, custom runtimes, or other dependencies that multiple Lambda functions can share.
+
+Benefits:
+- **Reduce deployment package size** — common code lives in the layer
+- **Share dependencies** across functions (e.g., a shared `requests` library, custom SDK)
+- **Separate concerns** — update the layer independently from function code
+- **Up to 5 layers** per function; total unzipped size limit: 250 MB
+
+**DevOps angle:** Layers are essential for monorepo Lambda deployments — shared business logic or utility libraries packaged once. Common pattern: a Layer for database drivers (psycopg2 compiled for Lambda's Amazon Linux), another for observability SDK (X-Ray, Datadog). Interviewers ask: *"Your Lambda package is 300 MB and exceeds the limit — how do you fix it?"* → Move dependencies to a Layer, or use a container image (10 GB limit).
+
+**30. What is a Target Group and how does it relate to a Load Balancer?**
+
+A Target Group is a collection of targets (EC2 instances, IPs, Lambda functions, or containers) that a Load Balancer routes traffic to.
+
+Flow: **Client → Load Balancer → Listener (port + protocol) → Rule (path/host matching) → Target Group → Target (instance:port)**.
+
+- Each ALB/NLB has one or more **Listeners** (e.g., HTTPS:443)
+- Each Listener has **Rules** (e.g., `/api/*` → API Target Group)
+- Each Target Group has **health check** settings (path, interval, threshold)
+
+**DevOps angle:** Unhealthy targets are automatically removed from rotation. Health check misconfiguration is the #1 cause of "all targets unhealthy" — check the path returns 200 (not 301/302), the port is correct, and the Security Group allows health check traffic from the LB. Interviewers ask: *"Your deployment shows all targets as unhealthy — how do you debug?"* → Check health check path, security groups (LB SG → Target SG), and app startup time vs health check grace period.
+
+---
+
+### Hard (Senior / SRE Level)
+
+**31. Design a highly available web application architecture on AWS.**
+
+Production-grade 3-tier architecture:
+
+```
+Internet
+  ↓
+Route 53 (DNS, failover routing)
+  ↓
+CloudFront (CDN — static assets, SSL termination)
+  ↓
+ALB (public subnets, multi-AZ, WAF attached)
+  ↓
+ASG with EC2/ECS (private subnets, multi-AZ, min 2 instances)
+  ↓
+RDS Multi-AZ (private subnets, encrypted, automated backups)
+  +
+ElastiCache Redis (session store, caching layer)
+  +
+S3 (static assets, logs, backups)
+```
+
+Key decisions: Multi-AZ everything, private subnets for compute and data, ALB health checks, ASG scaling policies, RDS automated backups + Read Replicas, CloudWatch alarms + SNS, IaC (Terraform) for reproducibility.
+
+**DevOps angle:** This question tests your ability to think end-to-end. Interviewers want: redundancy at every layer, no single points of failure, security in depth, cost awareness (right-size instances, Savings Plans), monitoring and alerting, disaster recovery (cross-region RDS replica, S3 cross-region replication). The follow-up: *"What's your RTO and RPO?"* → Multi-AZ RDS: RPO=0, RTO=1-2 min. Cross-region failover: RPO=seconds (async replication lag), RTO=minutes (DNS failover).
+
+**32. Explain Lambda cold starts and how to mitigate them.**
+
+A **cold start** occurs when Lambda must initialize a new execution environment: download code, start the runtime, run init code (outside handler). Subsequent invocations reuse the warm environment.
+
+| Factor | Impact |
+|--------|--------|
+| Runtime | Java/.NET: 1-5s cold start; Python/Node: 100-500ms |
+| Package size | Larger = slower download and extraction |
+| VPC | ENI attachment adds 1-2s (improved with Hyperplane ENIs) |
+| Memory | More memory = faster CPU = faster init |
+
+Mitigations:
+- **Provisioned Concurrency** — pre-warms N environments (costs money)
+- Minimize package size (tree-shaking, Layers)
+- Initialize SDK clients outside the handler (reused on warm invocations)
+- Choose lighter runtimes (Python/Node over Java) for latency-sensitive paths
+- Increase memory allocation (proportionally faster CPU)
+
+**DevOps angle:** Cold starts matter for synchronous APIs (API Gateway → Lambda) — not for async (SQS triggers, where the user doesn't wait). Interviewers test: *"Your Lambda-backed API has P99 latency of 5s but P50 of 200ms — what's happening?"* → Cold starts hitting P99. Solution: Provisioned Concurrency for production API, or move latency-critical paths to Fargate/ECS.
+
+**33. How does IAM policy evaluation work? Explain the evaluation logic.**
+
+Evaluation order:
+
+1. **Explicit Deny** — any deny in any policy → **DENIED** (always wins)
+2. **Organization SCPs** — if the org SCP doesn't allow it → **DENIED**
+3. **Resource-based policy** — if it grants access → **ALLOWED** (for same-account)
+4. **Permissions boundary** — if set, action must be within boundary → else **DENIED**
+5. **Session policy** — if using assumed role with session policy → must be within
+6. **Identity-based policy** — if an attached policy allows it → **ALLOWED**
+7. **Default** → **DENIED** (implicit deny)
+
+**DevOps angle:** The key rule: explicit Deny always wins, and the default is Deny. This means you can't "override" a Deny with an Allow. Permissions boundaries are used to delegate IAM admin safely: give developers permission to create roles, but with a boundary that prevents privilege escalation. Interviewers ask: *"A user has AdministratorAccess but can't launch EC2 — why?"* → Check: SCP restriction, permissions boundary, or a resource-based policy with explicit Deny.
+
+**34. Explain S3 bucket policies vs IAM policies vs ACLs — when do you use each?**
+
+| Mechanism | Attached to | Scope | Use case |
+|-----------|------------|-------|----------|
+| IAM Policy | User, Group, Role | Identity-centric | "This role can read this bucket" |
+| Bucket Policy | S3 bucket | Resource-centric | "This bucket allows access from account X" |
+| ACL | Bucket or object | Legacy, per-object | Avoid — use policies instead |
+| Block Public Access | Account or bucket | Guardrail | Always ON in production |
+
+**DevOps angle:** Bucket policies for: cross-account access, enforcing encryption (`"Condition": {"StringNotEquals": {"s3:x-amz-server-side-encryption": "aws:kms"}}`), restricting by VPC endpoint, or CloudFront Origin Access Identity. IAM policies when the caller is in the same account. Never use ACLs for new workloads — AWS recommends disabling them (S3 Object Ownership = BucketOwnerEnforced). Interviewers ask: *"How do you ensure all objects in a bucket are encrypted?"* → Bucket policy that denies `PutObject` without encryption header + default encryption setting on the bucket.
+
+**35. What is Lambda concurrency? Explain reserved vs provisioned concurrency.**
+
+- **Account concurrency limit:** 1000 concurrent executions per Region (can request increase)
+- **Unreserved:** All functions share the pool — one runaway function can starve others
+- **Reserved Concurrency:** Guarantees N concurrent executions for a function AND caps it at N. No extra cost, but reduces the pool for others.
+- **Provisioned Concurrency:** Pre-initializes N execution environments — eliminates cold starts. Costs money (you pay for idle warm environments).
+
+```
+Account limit: 1000
+├── Function A: reserved 100 (guaranteed 100, max 100)
+├── Function B: provisioned 50 (50 warm, can burst beyond with cold starts)
+└── Remaining: 900 unreserved (shared by all other functions)
+```
+
+**DevOps angle:** Reserved concurrency is free throttle protection — critical functions won't be starved by a misbehaving function. Provisioned concurrency is for latency-critical APIs. Interviewers ask: *"Your Lambda is getting throttled (429s) — what do you do?"* → Check account concurrency limit, check if another function consumed the pool, add reserved concurrency, request limit increase. For SQS-triggered Lambda: throttling causes messages to retry and return to the queue — not lost, but delayed.
+
+**36. How would you migrate an on-premises database to RDS with minimal downtime?**
+
+Approach: **AWS Database Migration Service (DMS)** with continuous replication.
+
+1. **Assessment:** Run AWS Schema Conversion Tool (SCT) if changing engines (Oracle → PostgreSQL)
+2. **Full load:** DMS copies all existing data to RDS target
+3. **Change Data Capture (CDC):** DMS replicates ongoing changes in real-time
+4. **Validation:** Compare source and target row counts, checksums
+5. **Cutover:** Stop application writes → wait for CDC lag to reach 0 → switch connection string to RDS → start application
+6. **Rollback plan:** Keep source DB running for 24-48 hours
+
+Downtime: only during the cutover window (minutes, not hours).
+
+**DevOps angle:** Key risks: data type mismatches (SCT catches these), CDC falling behind under heavy write load, application connection string change (use DNS CNAME or parameter store for quick switching). Interviewers drill into: *"What if CDC is 2 hours behind at cutover time?"* → Increase DMS instance size, reduce source write load, or perform cutover during maintenance window. Always test with production-scale data first.
+
+**37. Explain VPC networking: subnets, route tables, Internet Gateway, NAT Gateway.**
+
+```
+VPC (10.0.0.0/16)
+├── Public Subnet A (10.0.1.0/24) — AZ-a
+│   ├── Route: 0.0.0.0/0 → Internet Gateway
+│   ├── ALB, NAT Gateway, Bastion
+│   └── Public IP / Elastic IP attached
+├── Private Subnet A (10.0.10.0/24) — AZ-a
+│   ├── Route: 0.0.0.0/0 → NAT Gateway
+│   ├── App servers, ECS tasks
+│   └── No public IP
+├── DB Subnet A (10.0.20.0/24) — AZ-a
+│   ├── Route: no internet route
+│   └── RDS, ElastiCache
+└── (mirror all subnets in AZ-b for HA)
+
+Internet Gateway: 1 per VPC, enables internet ↔ public subnet
+NAT Gateway: in public subnet, enables private subnet → internet (outbound only)
+Route Table: per subnet, defines where traffic goes
+```
+
+**DevOps angle:** VPC design is a Day 1 decision that's painful to change. Plan CIDR blocks carefully — `/16` VPC gives 65K IPs, enough for growth. Avoid overlapping CIDRs if you'll peer VPCs later. NAT Gateway costs: $0.045/hr + $0.045/GB processed — use VPC endpoints (S3, DynamoDB, ECR) to bypass NAT for AWS traffic. Interviewers ask: *"Your private subnet EC2 can't reach the internet — troubleshoot."* → Check: route table has NAT GW route, NAT GW is in a public subnet with IGW route, NAT GW's SG (it doesn't have one — NACLs and route table are what matter), check NACLs on both subnets.
+
+**38. What is Aurora and how is it different from standard RDS?**
+
+Aurora is AWS's cloud-native relational database (MySQL and PostgreSQL compatible) with a **distributed storage architecture**.
+
+| Feature | Standard RDS | Aurora |
+|---------|-------------|--------|
+| Storage | Single EBS volume per instance | Distributed across 6 copies in 3 AZs |
+| Replication | Synchronous (Multi-AZ) | Storage-level (no replication lag for HA) |
+| Failover | 60-120 seconds | ~30 seconds |
+| Read Replicas | Up to 5 | Up to 15 (shared storage — nearly zero lag) |
+| Performance | Baseline | Up to 5x MySQL, 3x PostgreSQL throughput |
+| Storage scaling | Manual (modify volume) | Auto-scales up to 128 TB |
+| Cost | Lower | ~20% more than standard RDS |
+
+**DevOps angle:** Aurora is the default choice for production MySQL/PostgreSQL on AWS unless cost is the primary constraint. Aurora Serverless v2 scales compute up/down automatically — ideal for variable workloads. The 6-copy storage with automatic repair means you can lose 2 copies without read availability impact and 3 copies without write availability impact. Interviewers ask: *"Why Aurora over standard RDS PostgreSQL?"* → Faster failover, more read replicas, auto-scaling storage, better durability.
+
+**39. How do you implement blue/green deployments on AWS?**
+
+Blue/green maintains two identical environments — "blue" (current) and "green" (new version).
+
+| Layer | Blue/Green approach |
+|-------|-------------------|
+| EC2/ASG | Two ASGs behind the same ALB Target Groups. Shift traffic by updating listener rules. |
+| ECS | Built-in blue/green via CodeDeploy — creates new task set, shifts traffic, drains old. |
+| RDS | RDS Blue/Green Deployments (native) — creates green from blue, syncs via replication, switchover swaps endpoints. |
+| Lambda | Aliases with weighted routing (10% → green, 90% → blue) via CodeDeploy. |
+| Route 53 | Weighted routing: shift DNS weight from blue to green. |
+
+**DevOps angle:** The key advantage: instant rollback — just route traffic back to blue. In ECS, CodeDeploy blue/green with health check validation: deploy green task set → run test traffic → shift 100% → terminate blue (after bake time). Interviewers ask: *"How do you roll back a bad deployment at 2AM?"* → Blue/green: flip traffic back in seconds. Compare to rolling updates: rollback requires re-deploying the old version. Blue/green costs 2x resources during deployment but offers the safest rollback.
+
+**40. Explain CloudWatch Container Insights and how it works with EKS.**
+
+Container Insights collects, aggregates, and summarizes metrics and logs from containerized applications on EKS, ECS, and Kubernetes.
+
+Metrics collected: **CPU, memory, network, disk per cluster, node, pod, container, and service**. Also: pod restarts, container count, node conditions.
+
+How it works with EKS:
+1. **CloudWatch Agent** (DaemonSet) collects node and pod metrics via kubelet/cAdvisor
+2. **Fluent Bit** (DaemonSet) forwards container logs to CloudWatch Logs
+3. Metrics appear as **performance log events** in the `/aws/containerinsights/<cluster>/performance` log group
+4. Auto-generated dashboards show cluster → node → pod drill-down
+
+**DevOps angle:** Container Insights is the quickest way to get EKS observability without third-party tools (Datadog, Prometheus). Limitations: higher cost at scale (log ingestion fees), less flexible than Prometheus for custom metrics and alerting. Interviewers ask: *"How do you monitor pod resource usage in EKS?"* → Container Insights for quick setup, or Prometheus + Grafana for advanced dashboards and alerting with lower long-term cost.
+
+**41. What is cross-region replication and when would you use it?**
+
+| Service | Replication type | Lag | Use case |
+|---------|-----------------|-----|----------|
+| S3 | Cross-Region Replication (CRR) | Minutes | Compliance, DR, lower-latency access |
+| RDS | Cross-Region Read Replica | Seconds-minutes | DR, global reads |
+| Aurora | Global Database | < 1 second | Multi-region active reads, DR with RPO < 1s |
+| DynamoDB | Global Tables | Seconds | Multi-region active-active writes |
+
+**DevOps angle:** Cross-region replication is for **disaster recovery** (Region-level failure) and **global performance** (read-local). S3 CRR: commonly used for compliance (data must exist in two Regions). Aurora Global Database: the gold standard for RDS DR — promote a secondary Region in < 1 minute. Interviewers ask: *"Your primary Region goes completely down — what's your plan?"* → Route 53 health checks detect failure → failover routing policy switches to secondary Region → Aurora Global Database promoted → application runs from secondary.
+
+**42. How do you secure an S3 bucket serving a static website?**
+
+```
+CloudFront (HTTPS, custom domain, WAF)
+  ↓ (Origin Access Control — OAC)
+S3 Bucket (Block Public Access ON, bucket policy allows only CloudFront)
+```
+
+Security layers:
+1. **Block Public Access** — enabled on the bucket (no direct S3 URL access)
+2. **Origin Access Control (OAC)** — only CloudFront can read from S3
+3. **Bucket policy** — explicitly allows `s3:GetObject` from CloudFront's OAC only
+4. **CloudFront** — enforces HTTPS (redirect HTTP→HTTPS), custom domain with ACM cert
+5. **WAF** — rate limiting, geo-blocking, SQL injection protection on CloudFront
+6. **S3 encryption** — SSE-S3 or SSE-KMS at rest
+
+**DevOps angle:** Never enable "S3 Static Website Hosting" with public access for production — it serves over HTTP and bypasses CloudFront. The correct pattern is CloudFront + OAC + private bucket. Interviewers ask: *"Someone accessed your S3 bucket directly bypassing CloudFront — how do you prevent that?"* → Block Public Access ON, bucket policy with `Condition` that requires `aws:SourceArn` matching your CloudFront distribution ARN.
+
+**43. Explain ELB connection draining and how it prevents dropped requests.**
+
+Connection draining (called **deregistration delay** in ALB/NLB) keeps in-flight requests alive when a target is being removed (scaling in, failing health check, or deployment).
+
+Flow:
+1. Target marked for removal (deregistering)
+2. LB stops sending **new** requests to that target
+3. **Existing** connections are allowed to complete within the deregistration delay (default: 300s)
+4. After timeout, remaining connections are forcefully closed
+
+**DevOps angle:** Critical during deployments — without it, in-flight requests get 502/504 errors. For ECS blue/green: set deregistration delay to match your longest request duration. Too long = slow deployments (old containers linger). Too short = dropped requests. Typical: 30-60s for APIs, 300s for WebSocket or long-polling. Interviewers ask: *"Users see 502 errors during deployment — how do you fix it?"* → Check deregistration delay, pre-stop lifecycle hooks (Kubernetes), and health check grace period for new targets.
+
+**44. What are lifecycle hooks in Auto Scaling and when do you use them?**
+
+Lifecycle hooks pause an instance during launch or termination, giving you time to run custom actions before the instance enters or leaves service.
+
+| Hook | Pause state | Use case |
+|------|------------|----------|
+| Launch | `Pending:Wait` | Pull config from S3, register with service discovery, warm caches, run health validation |
+| Terminate | `Terminating:Wait` | Drain connections, deregister from service discovery, push logs to S3, snapshot EBS |
+
+Flow: ASG triggers launch → instance enters `Pending:Wait` → EventBridge/SNS triggers your Lambda/SSM action → action completes, sends `CONTINUE` → instance enters `InService`.
+
+Default timeout: 1 hour (configurable up to 48 hours with heartbeats).
+
+**DevOps angle:** Without a termination hook, a scaling-in event kills an instance mid-request. With the hook, you drain connections and flush logs. Interviewers ask: *"How do you ensure no data loss when ASG terminates an instance?"* → Termination lifecycle hook → Lambda function snapshots EBS, pushes logs to S3, deregisters from LB → sends `CONTINUE`. Combined with ELB deregistration delay for zero-downtime scale-in.
+
+**45. How do you troubleshoot a Lambda function timing out?**
+
+Systematic approach:
+
+1. **Check timeout setting** — default is 3s, max is 15 min. Increase if legitimate.
+2. **CloudWatch Logs** — look at the last log line before timeout. Where did execution stop?
+3. **X-Ray tracing** — enable Active Tracing to see time spent in each SDK call (DynamoDB, S3, HTTP).
+4. **Common causes:**
+   - **VPC + no NAT** — Lambda in VPC can't reach internet/AWS APIs → hangs → timeout. Fix: NAT Gateway or VPC endpoints.
+   - **DNS resolution failure** — similar symptoms to network timeout.
+   - **Downstream dependency slow** — DB query, external API. Add timeouts to SDK clients.
+   - **Cold start** — init code too heavy (large dependencies, DB connection pool init).
+   - **Insufficient memory** — Lambda CPU scales with memory. 128 MB = very slow CPU.
+
+```bash
+# Check recent timeouts
+aws logs filter-log-events \
+  --log-group-name /aws/lambda/my-function \
+  --filter-pattern "Task timed out"
+```
+
+**DevOps angle:** The most common production issue: Lambda in a VPC without NAT Gateway or VPC endpoints — it tries to call AWS APIs (DynamoDB, S3), can't reach them, and times out after 15 minutes of silence. Interviewers test this exact scenario: *"Lambda worked in dev but times out in prod."* → Dev had no VPC, prod has VPC. Add VPC endpoints for S3/DynamoDB, NAT Gateway for external APIs.
+
+**46. Explain RDS Parameter Groups and when you'd customize them.**
+
+A Parameter Group is a collection of database engine configuration parameters applied to an RDS instance. Think of it as the `postgresql.conf` or `my.cnf` equivalent.
+
+Types:
+- **DB Parameter Group** — instance-level settings (memory buffers, timeouts, logging)
+- **DB Cluster Parameter Group** — Aurora cluster-wide settings
+
+Common customizations:
+
+| Parameter | Engine | Why customize |
+|-----------|--------|--------------|
+| `max_connections` | MySQL/PG | Default is based on instance memory — may need tuning for connection pooling |
+| `shared_buffers` | PostgreSQL | Default is conservative — typically set to 25% of RAM |
+| `slow_query_log` | MySQL | Enable to capture slow queries |
+| `log_min_duration_statement` | PostgreSQL | Log queries slower than N ms |
+| `rds.force_ssl` | PostgreSQL | Enforce TLS connections |
+
+**DevOps angle:** Never modify the default Parameter Group — it's shared and can't be customized. Create a custom Parameter Group, apply settings, and associate it with your instance (requires reboot for static parameters). Interviewers ask: *"Your application is running out of database connections — how do you fix it?"* → Check `max_connections`, but better: use RDS Proxy or PgBouncer for connection pooling — increasing `max_connections` wastes memory and doesn't scale.
+
+**47. What is Lambda@Edge and how does it differ from CloudFront Functions?**
+
+| Feature | Lambda@Edge | CloudFront Functions |
+|---------|------------|---------------------|
+| Runtime | Node.js, Python | JavaScript only |
+| Execution | Regional edge caches | All 400+ edge locations |
+| Timeout | 5s (viewer) / 30s (origin) | < 1 ms |
+| Memory | Up to 10 GB | 2 MB |
+| Network access | Yes | No |
+| Triggers | Viewer request/response, Origin request/response | Viewer request/response only |
+| Cost | $$$ | $ (1/6th the cost) |
+
+**DevOps angle:** CloudFront Functions for lightweight tasks: URL rewrites, header manipulation, redirect rules, cache key normalization. Lambda@Edge for heavy lifting: A/B testing with backend calls, authentication (JWT validation with external IdP), dynamic origin selection, image transformation. Interviewers ask: *"How do you add authentication to a CloudFront distribution?"* → Lambda@Edge on Viewer Request — validate JWT token, return 401 if invalid, forward to origin if valid.
+
+**48. How would you design a cost-optimized architecture using Spot Instances?**
+
+Spot Instances offer up to 90% discount but can be interrupted with 2 minutes notice.
+
+Design principles:
+1. **Diversify** — use multiple instance types and AZs (capacity pools). ASG mixed instances policy.
+2. **Stateless workloads only** — web servers, workers, batch jobs. Never databases.
+3. **Interruption handling** — monitor the 2-min warning via instance metadata or EventBridge, drain gracefully.
+4. **Mixed ASG** — On-Demand for baseline (e.g., 30%), Spot for burst (70%). `capacity-optimized` allocation strategy.
+5. **Spot Fleet / EC2 Fleet** — request capacity across multiple pools automatically.
+
+```
+ASG (mixed instances):
+├── On-Demand: 2 × m6i.large (baseline — always running)
+├── Spot: 0-8 × [m6i.large, m5.large, m6a.large, c6i.large] (scale with demand)
+└── Allocation: capacity-optimized (fewest interruptions)
+```
+
+**DevOps angle:** Spot works well for: CI/CD build agents (Jenkins/GitHub Actions runners), batch processing (EMR, ECS tasks), stateless API servers behind ALB, and data processing pipelines. Never use Spot for: databases, Kafka brokers, etcd, or any stateful singleton. Interviewers ask: *"How do you handle a Spot interruption mid-deployment?"* → ASG automatically replaces from another pool; ECS reschedules the task; interruption handler drains connections and pushes in-flight work to SQS.
+
+**49. Explain horizontal vs vertical scaling. When do you use each on AWS?**
+
+| Aspect | Vertical (Scale Up) | Horizontal (Scale Out) |
+|--------|--------------------|-----------------------|
+| Method | Bigger instance (more CPU/RAM) | More instances |
+| Downtime | Usually requires stop/start | Zero downtime (add behind LB) |
+| Limit | Instance type ceiling | Virtually unlimited |
+| State | Works for stateful (databases) | Requires stateless or shared state |
+| Cost | Linear (2x resources = 2x cost) | Sub-linear with right-sizing |
+| AWS tools | Modify instance type | ASG, ECS service scaling, Lambda concurrency |
+
+**DevOps angle:** Horizontal scaling is the default for stateless services — ASG + ALB. Vertical scaling for databases (bigger RDS instance) when you can't easily shard. The real answer is: horizontal for the app tier, vertical + read replicas for the data tier, and eventually sharding when vertical hits a ceiling. Interviewers ask: *"Your single RDS instance is at max CPU on the largest instance type — what now?"* → Read Replicas for read-heavy, Aurora for better throughput, or application-level sharding for write-heavy. DynamoDB if you can redesign the data model.
+
+**50. How do you implement least-privilege access in a production AWS environment?**
+
+Layered approach:
+
+1. **Organization level:** SCPs deny dangerous actions across all accounts (e.g., deny `ec2:*` in non-prod, deny leaving the org)
+2. **Account level:** Separate accounts per environment (dev/staging/prod via AWS Organizations)
+3. **Identity:** SSO with SAML/OIDC federation (no long-term IAM users), MFA enforced
+4. **Roles:** Service-specific roles with tightly scoped policies (Lambda execution role only gets `dynamodb:PutItem` on one table)
+5. **Permissions boundaries:** Developers can create roles but only within a defined boundary
+6. **Resource policies:** S3 bucket policies restrict to specific VPC endpoints, KMS key policies restrict to specific roles
+7. **Audit:** IAM Access Analyzer finds unused permissions, CloudTrail + Athena for access pattern analysis
+
+```bash
+# Find unused permissions
+aws accessanalyzer generate-findings --analyzer-arn ...
+# Review who accessed what
+aws cloudtrail lookup-events --lookup-attributes AttributeKey=EventName,AttributeValue=AssumeRole
+```
+
+**DevOps angle:** Start permissive in dev, then tighten — use IAM Access Analyzer to identify permissions granted but never used, then remove them. Use `aws iam generate-service-last-accessed-details` to find which services a role actually uses. Interviewers ask: *"A developer needs to deploy Lambda functions — what permissions do you give?"* → A custom policy allowing `lambda:CreateFunction`, `lambda:UpdateFunctionCode` on specific function ARNs, `iam:PassRole` for the execution role only, and `logs:CreateLogGroup` — not `lambda:*` and never `iam:*`.
 
 ---
 
