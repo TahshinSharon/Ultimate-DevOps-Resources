@@ -191,6 +191,18 @@
   - [Lambda Security](#lambda-security)
   - [Lambda Functions Best Practices](#lambda-functions-best-practices)
   - [Reference](#reference-4)
+- [API Gateway Basics](#api-gateway-basics)
+  - [One Shot Revision](#one-shot-revision-15)
+  - [API Gateway Overview](#api-gateway-overview)
+  - [Creating a REST API](#creating-a-rest-api)
+  - [Request & Response Transformation](#request--response-transformation)
+  - [Authorization & Security](#authorization--security)
+  - [Throttling, Usage Plans & API Keys](#throttling-usage-plans--api-keys)
+  - [Stages & Deployments](#stages--deployments)
+  - [CORS Configuration](#cors-configuration)
+  - [Monitoring & Logging](#monitoring--logging)
+  - [API Gateway Best Practices](#api-gateway-best-practices)
+  - [Reference](#reference-5)
 - [Useful Tips & Tricks](#useful-tips--tricks)
 - [References](#references)
 
@@ -9313,6 +9325,931 @@ Never expose a function URL with `AuthType: NONE` without validating the caller 
 → [Lambda Security Best Practices](https://docs.aws.amazon.com/lambda/latest/dg/best-practices.html)
 
 → [Lambda Power Tuning — open source tool](https://github.com/alexcasalboni/aws-lambda-power-tuning)
+
+---
+
+## API Gateway Basics
+
+**What you will build in this section:**
+You will build a fully functional REST API on Amazon API Gateway — from raw resource creation through production-ready authorization, throttling, and observability. By the end you will have real working systems that:
+- Expose Lambda functions as HTTP endpoints using proxy integration
+- Validate and transform requests/responses without touching Lambda code
+- Protect endpoints with API Keys, Lambda Authorizers, and Cognito User Pools
+- Apply throttling and usage plans to prevent abuse and control costs
+- Deploy to multiple stages (dev/staging/prod) with independent configurations
+- Handle CORS so browser clients can call your API
+- Surface errors and latency in CloudWatch with access logging
+
+**Architecture of what we're building:**
+
+```
+  Browser / Mobile / CLI
+           │
+           ▼
+    [API Gateway]
+    ┌───────────────────────────────────────────────┐
+    │  Stage: /prod                                 │
+    │  ┌────────────┐   ┌──────────────────────┐   │
+    │  │  Authorizer│   │  Usage Plan + API Key│   │
+    │  └─────┬──────┘   └──────────┬───────────┘   │
+    │        │  (allow/deny)       │ (throttle)     │
+    │        ▼                     ▼                │
+    │  ┌────────────────────────────────────┐       │
+    │  │  Resource: /items                  │       │
+    │  │  Methods:  GET  POST  DELETE       │       │
+    │  └─────────────────┬──────────────────┘       │
+    └─────────────────────│─────────────────────────┘
+                          │ proxy integration
+                          ▼
+                   [Lambda Function]
+                          │
+              ┌───────────┴───────────┐
+              ▼                       ▼
+        [DynamoDB]            [CloudWatch Logs]
+```
+
+**The things we'll build — in order:**
+
+```
+1. Overview  →  2. Create REST API  →  3. Request/Response Transform  →  4. Authorization
+      │
+5. Throttling & Usage Plans  →  6. Stages  →  7. CORS  →  8. Monitoring  →  9. Best Practices
+```
+
+**Prerequisites — check these before starting:**
+- [ ] Completed the Lambda Functions section (handlers, proxy integration basics)
+- [ ] A Lambda function already exists (`my-first-function` or equivalent)
+- [ ] Basic understanding of HTTP methods and status codes
+
+---
+
+### One Shot Revision
+
+| Step | Topic | What you do |
+| ---- | ----- | ----------- |
+| 1 | [API Gateway Overview](#api-gateway-overview) | Understand the three API types and when to choose each |
+| 2 | [Creating a REST API](#creating-a-rest-api) | Create resources, methods, and deploy your first endpoint |
+| 3 | [Request & Response Transformation](#request--response-transformation) | Map, validate, and reshape payloads without Lambda code changes |
+| 4 | [Authorization & Security](#authorization--security) | Protect endpoints with API Keys, Lambda Authorizers, and Cognito |
+| 5 | [Throttling, Usage Plans & API Keys](#throttling-usage-plans--api-keys) | Rate-limit callers and apply per-client quotas |
+| 6 | [Stages & Deployments](#stages--deployments) | Deploy to dev/staging/prod with stage variables |
+| 7 | [CORS Configuration](#cors-configuration) | Enable browser clients to call your API |
+| 8 | [Monitoring & Logging](#monitoring--logging) | Surface errors and latency with access logs and CloudWatch metrics |
+| 9 | [API Gateway Best Practices](#api-gateway-best-practices) | Production rules for security, cost, and reliability |
+| 10 | [Reference](#reference-5) | Clean up all resources + official docs |
+
+---
+
+### API Gateway Overview
+
+**Read this first — choose the right API type before building.**
+
+Amazon API Gateway has three distinct API types. Picking the wrong one wastes money and adds complexity:
+
+```
+┌────────────────────────────────────────────────────────────────────────┐
+│                 API Gateway — Three API Types                          │
+│                                                                        │
+│  REST API               HTTP API              WebSocket API            │
+│  ──────────────────     ──────────────────    ──────────────────────   │
+│  Full feature set:      Lightweight & fast:   Persistent connections:  │
+│  request validation,    ~70% cheaper than     bidirectional messaging  │
+│  usage plans, caching,  REST API, JWT auth,   chat apps, live feeds,   │
+│  custom authorizers,    Lambda proxy, OIDC    real-time dashboards     │
+│  WAF integration        No request validation                          │
+│                         No usage plans                                 │
+│                         No caching                                     │
+│                                                                        │
+│  Choose REST API when:  Choose HTTP API when: Choose WebSocket when:   │
+│  • Need full control    • Simple Lambda proxy • Clients need push      │
+│  • Usage plans/keys     • Lowest latency      • Long-lived sessions    │
+│  • Request validation   • JWT/OIDC auth only  • Real-time updates      │
+│  • WAF / caching        • Cost is top concern                          │
+└────────────────────────────────────────────────────────────────────────┘
+```
+
+**How a REST API request flows through API Gateway:**
+
+```
+Client Request
+      │
+      ▼
+[Method Request]  ←── authorizer runs here (Lambda / Cognito / IAM)
+      │               API key check + throttle check happen here
+      ▼
+[Integration Request]  ←── request mapping template transforms payload
+      │
+      ▼
+[Backend] (Lambda / HTTP / AWS service / Mock)
+      │
+      ▼
+[Integration Response]  ←── response mapping template reshapes payload
+      │
+      ▼
+[Method Response]  ←── status codes declared here; CORS headers added
+      │
+      ▼
+Client Response
+```
+
+**Key concepts:**
+
+| Concept | What it is | Why it matters |
+| ------- | ----------- | -------------- |
+| **Resource** | A URL path segment (`/items`, `/items/{id}`) | Organises your API surface area |
+| **Method** | HTTP verb on a resource (`GET /items`) | Entry point for one operation |
+| **Integration** | Backend the method calls (Lambda, HTTP URL, AWS service) | Where the actual work happens |
+| **Stage** | A snapshot of a deployment (`dev`, `prod`) | Lets you run multiple versions in parallel |
+| **Stage variable** | Key-value pairs scoped to a stage | Point `dev` at a dev Lambda, `prod` at a prod Lambda |
+| **Deployment** | Immutable snapshot of the API config | Must re-deploy to publish changes to a stage |
+| **Usage plan** | Throttle + quota settings | Applied per API Key; prevents abuse |
+| **Authorizer** | Lambda or Cognito function that allows/denies requests | Replaces hand-rolled auth in every Lambda handler |
+
+---
+
+### Creating a REST API
+
+**HANDS-ON — Create a REST API with GET and POST methods (20 min)**
+
+**Navigate:** API Gateway → **Create API** → **REST API** → **Build**
+
+---
+
+**Step 1 — Create the API**
+
+| Field | Value |
+| ----- | ----- |
+| Protocol | REST |
+| API name | `items-api` |
+| Description | `CRUD API for items` |
+| Endpoint type | **Regional** *(use Edge-Optimised only if global low-latency is required)* |
+
+Click **Create API**
+
+---
+
+**Step 2 — Create resources**
+
+1. In the left tree, select `/` (root)
+2. **Actions** → **Create Resource**
+
+| Field | Value |
+| ----- | ----- |
+| Resource name | `items` |
+| Resource path | `/items` |
+| Enable API Gateway CORS | ✓ *(tick this — adds OPTIONS method automatically)* |
+
+3. Click **Create Resource**
+4. Select `/items` → **Actions** → **Create Resource** again
+
+| Field | Value |
+| ----- | ----- |
+| Resource name | `item` |
+| Resource path | `{id}` |
+
+5. Click **Create Resource** — you now have `/items/{id}`
+
+---
+
+**Step 3 — Create a GET method on /items**
+
+1. Select `/items` → **Actions** → **Create Method** → select **GET** → ✓ (tick mark)
+2. Configure the integration:
+
+| Field | Value |
+| ----- | ----- |
+| Integration type | Lambda Function |
+| Use Lambda Proxy Integration | ✓ |
+| Lambda Region | your region |
+| Lambda Function | `my-first-function` |
+
+3. Click **Save** → **OK** to grant permission
+
+---
+
+**Step 4 — Create a POST method on /items**
+
+Repeat Step 3 for **POST** on `/items`. The handler receives the request body at `event['body']`.
+
+---
+
+**Step 5 — Create a GET method on /items/{id}**
+
+1. Select `/items/{id}` → **Actions** → **Create Method** → **GET**
+2. Same integration settings as Step 3
+3. In the Lambda handler, read the path parameter:
+
+```python
+def lambda_handler(event, context):
+    item_id = event['pathParameters']['id']   # from /items/{id}
+    # fetch item by id ...
+    return {
+        "statusCode": 200,
+        "headers": {"Content-Type": "application/json"},
+        "body": json.dumps({"id": item_id, "name": "Widget"})
+    }
+```
+
+---
+
+**Step 6 — Deploy to a stage**
+
+1. **Actions** → **Deploy API**
+2. Deployment stage: **[New Stage]**
+3. Stage name: `dev`
+4. Click **Deploy**
+
+Your API is now live at:
+```
+https://<api-id>.execute-api.<region>.amazonaws.com/dev/items
+```
+
+**Test with curl:**
+
+```bash
+# GET all items
+curl https://<api-id>.execute-api.<region>.amazonaws.com/dev/items
+
+# GET single item
+curl https://<api-id>.execute-api.<region>.amazonaws.com/dev/items/42
+
+# POST a new item
+curl -X POST https://<api-id>.execute-api.<region>.amazonaws.com/dev/items \
+  -H "Content-Type: application/json" \
+  -d '{"name": "Widget", "price": 9.99}'
+```
+
+---
+
+**Common mistakes at this stage:**
+
+| Mistake | Symptom | Fix |
+| ------- | ------- | --- |
+| Forgetting to deploy after changes | Old behaviour persists | Always deploy after any config change |
+| Using non-proxy integration without mapping templates | 500 errors or empty responses | Either enable proxy integration or add mapping templates |
+| Not granting Lambda permission | 500 Internal Server Error | API Gateway → Method → Integration → click Lambda function name again → Save |
+| Selecting the wrong region for Lambda | `ResourceNotFoundException` | Lambda region must match API Gateway region |
+
+---
+
+### Request & Response Transformation
+
+**HANDS-ON — Validate requests and reshape responses without changing Lambda (15 min)**
+
+**Navigate:** API Gateway → `items-api` → Resources → `/items` → **GET**
+
+---
+
+**Request validation — reject malformed requests before they hit Lambda**
+
+1. Select `GET /items` → **Method Request**
+2. **Request Validator**: select **Validate query string parameters and headers**
+3. Under **URL Query String Parameters** → **Add query string**:
+   - Name: `limit` | Required: ✓
+4. Click ✓ to save
+
+Now a `GET /items` request without `?limit=` returns `400 Bad Request` immediately — Lambda is never invoked.
+
+---
+
+**Request model — validate POST body structure**
+
+1. **Models** (left panel) → **Create**
+
+| Field | Value |
+| ----- | ----- |
+| Model name | `ItemModel` |
+| Content type | `application/json` |
+| Schema | See below |
+
+```json
+{
+  "$schema": "http://json-schema.org/draft-04/schema#",
+  "title": "ItemModel",
+  "type": "object",
+  "required": ["name", "price"],
+  "properties": {
+    "name":  { "type": "string",  "minLength": 1 },
+    "price": { "type": "number",  "minimum": 0   }
+  },
+  "additionalProperties": false
+}
+```
+
+2. `POST /items` → **Method Request** → **Request Validator**: `Validate body`
+3. **Request Body** → **Add model** → Content type: `application/json` → Model: `ItemModel`
+
+A POST body missing `name` or `price` now returns `400` before Lambda runs.
+
+---
+
+**Mapping template — reshape the response from Lambda**
+
+Use this when you want to add/remove/rename fields in the response without modifying Lambda:
+
+1. `GET /items` → **Integration Response** → expand `200` → **Mapping Templates**
+2. Content-Type: `application/json` → add template:
+
+```velocity
+#set($items = $input.path('$.items'))
+{
+  "data": $input.json('$.items'),
+  "total": $items.size(),
+  "timestamp": "$context.requestTime"
+}
+```
+
+> `$input.path()` reads from the Lambda response body. `$context.*` gives request metadata.
+
+---
+
+**Key mapping template variables:**
+
+| Variable | What it contains |
+| -------- | ---------------- |
+| `$input.body` | Raw request/response body as a string |
+| `$input.json('$.field')` | JSON value at a path |
+| `$input.path('$.field')` | Value as a Java object (for logic) |
+| `$context.requestId` | Unique ID for this request |
+| `$context.requestTime` | Timestamp of the request |
+| `$context.identity.sourceIp` | Caller's IP address |
+| `$stageVariables.lambdaAlias` | Stage variable value |
+
+---
+
+### Authorization & Security
+
+**HANDS-ON — Protect your API with three different auth mechanisms (20 min)**
+
+---
+
+**Option A — API Key auth (simplest, for internal/partner APIs)**
+
+1. API Gateway → **API Keys** → **Create API Key**
+
+| Field | Value |
+| ----- | ----- |
+| Name | `partner-key` |
+| Auto Generate | ✓ |
+
+2. `GET /items` → **Method Request** → **API Key Required**: `true`
+3. Create a Usage Plan (see [Throttling section](#throttling-usage-plans--api-keys)) and associate the key
+4. Re-deploy
+
+Callers must send: `x-api-key: <key-value>` header.
+
+> API Key auth is NOT a security mechanism — it identifies the caller but does not authenticate. Combine with HTTPS (always enforced) and IP allowlisting for sensitive APIs.
+
+---
+
+**Option B — Lambda Authorizer (custom token / header logic)**
+
+A Lambda Authorizer runs before your backend Lambda and returns an IAM policy:
+
+```python
+# authorizer Lambda — receives the token, returns allow/deny policy
+def lambda_handler(event, context):
+    token = event.get('authorizationToken', '')
+    method_arn = event['methodArn']
+
+    # Validate the token (JWT decode, DB lookup, etc.)
+    if token == "Bearer my-secret-token":
+        effect = "Allow"
+    else:
+        effect = "Deny"
+
+    return {
+        "principalId": "user-id-123",
+        "policyDocument": {
+            "Version": "2012-10-17",
+            "Statement": [{
+                "Action":   "execute-api:Invoke",
+                "Effect":   effect,
+                "Resource": method_arn
+            }]
+        },
+        "context": {                         # passed to the backend Lambda
+            "userId":    "user-id-123",
+            "userEmail": "user@example.com"
+        }
+    }
+```
+
+**Wire it up:**
+1. API Gateway → **Authorizers** → **Create New Authorizer**
+
+| Field | Value |
+| ----- | ----- |
+| Name | `token-authorizer` |
+| Type | Lambda |
+| Lambda Function | `my-authorizer-function` |
+| Lambda Event Payload | Token |
+| Token Source | `Authorization` header |
+| Authorization Caching | 300 seconds *(cache the policy to avoid calling the authorizer on every request)* |
+
+2. `GET /items` → **Method Request** → **Authorization**: select `token-authorizer`
+3. Re-deploy
+
+**Read authorizer context in the backend Lambda:**
+
+```python
+def lambda_handler(event, context):
+    # Values from the authorizer's 'context' dict
+    user_id    = event['requestContext']['authorizer']['userId']
+    user_email = event['requestContext']['authorizer']['userEmail']
+```
+
+---
+
+**Option C — Cognito User Pool Authorizer (managed JWT auth)**
+
+1. Create a Cognito User Pool (Cognito → **Manage User Pools** → **Create a user pool**)
+2. API Gateway → **Authorizers** → **Create New Authorizer**
+
+| Field | Value |
+| ----- | ----- |
+| Name | `cognito-authorizer` |
+| Type | Cognito |
+| Cognito User Pool | select your pool |
+| Token Source | `Authorization` |
+
+3. `GET /items` → **Method Request** → **Authorization**: `cognito-authorizer`
+4. Re-deploy
+
+Callers obtain a JWT from Cognito and send it as:
+```
+Authorization: <cognito-id-token>
+```
+
+---
+
+**Authorizer comparison:**
+
+| | API Key | Lambda Authorizer | Cognito Authorizer |
+| - | ------- | ----------------- | ------------------ |
+| **Use case** | Partner/internal caller ID | Custom token logic | End-user auth (JWT) |
+| **Latency** | Zero (no extra call) | +ms (mitigated by cache) | +ms (JWT validation) |
+| **Flexibility** | Low — header only | High — any logic | Medium — JWT standard |
+| **Managed** | No | No | Yes |
+| **Caching** | N/A | Yes (TTL configurable) | Yes |
+
+---
+
+### Throttling, Usage Plans & API Keys
+
+**HANDS-ON — Rate-limit callers and apply per-client quotas (15 min)**
+
+**Navigate:** API Gateway → **Usage Plans** → **Create**
+
+---
+
+**Step 1 — Create a Usage Plan**
+
+| Field | Value |
+| ----- | ----- |
+| Name | `standard-plan` |
+| Throttling — Rate | `100` requests/second *(steady-state RPS)* |
+| Throttling — Burst | `200` *(token bucket max — short spikes allowed)* |
+| Quota | `10000` requests per **Month** |
+
+Click **Next**
+
+---
+
+**Step 2 — Associate the API and stage**
+
+1. **Add API Stage** → select `items-api` → stage `prod`
+2. Click ✓ → **Next**
+
+---
+
+**Step 3 — Create and associate an API Key**
+
+1. **Create API Key and add to Usage Plan**
+2. Name: `client-a-key` → **Save**
+
+Your key is now rate-limited: 100 RPS sustained, 200 burst, 10,000/month hard cap.
+
+---
+
+**How API Gateway throttling works:**
+
+```
+Incoming requests
+        │
+        ▼
+┌───────────────────────────────────┐
+│  Account-level limit              │  10,000 RPS default (soft limit)
+│  ↓                                │
+│  Stage-level limit (optional)     │  set in Stage → Default Method Throttling
+│  ↓                                │
+│  Usage Plan limit (per API Key)   │  rate + burst + quota
+│  ↓                                │
+│  Method-level limit (optional)    │  override for specific routes
+└───────────────────────────────────┘
+        │
+        ▼ (if limit exceeded)
+  429 Too Many Requests
+```
+
+**Token bucket explained:**
+
+```
+Rate = 100 req/s  →  100 tokens added to bucket every second
+Burst = 200       →  bucket holds up to 200 tokens
+
+A burst of 200 requests arrives:
+  • All 200 served instantly (bucket drains to 0)
+  • Next 100 requests: wait 1 second for bucket to refill
+  • If more arrive before refill: 429 Too Many Requests
+```
+
+---
+
+**Per-method throttle override:**
+
+For a single expensive endpoint, set a tighter limit:
+1. Stage → **Logs/Tracing** tab → **Default Method Throttling**
+2. Or: Stage → **Stage Editor** → scroll to **Default Method Throttling** → **Add Method Override**
+   - Resource: `/items/{id}` | Method: `DELETE` | Rate: `10` | Burst: `20`
+
+---
+
+### Stages & Deployments
+
+**HANDS-ON — Deploy to dev, staging, and prod with stage variables (15 min)**
+
+**Navigate:** API Gateway → `items-api` → **Stages**
+
+---
+
+**Step 1 — Create multiple stages**
+
+1. **Stages** → **Create Stage**
+
+| Stage name | Description |
+| ---------- | ----------- |
+| `dev` | Development — points at dev Lambda alias |
+| `staging` | Pre-production testing |
+| `prod` | Live production traffic |
+
+---
+
+**Step 2 — Add stage variables**
+
+Stage variables let one API point at different Lambda aliases per stage:
+
+1. Select stage `dev` → **Stage Variables** tab → **Add Stage Variable**
+
+| Name | Value (dev stage) |
+| ---- | ----------------- |
+| `lambdaAlias` | `dev` |
+| `logLevel` | `DEBUG` |
+
+2. Repeat for `prod`:
+
+| Name | Value (prod stage) |
+| ---- | ------------------ |
+| `lambdaAlias` | `prod` |
+| `logLevel` | `ERROR` |
+
+---
+
+**Step 3 — Reference stage variables in integration**
+
+In the Lambda integration URI, replace the hardcoded function name with a stage variable:
+
+```
+arn:aws:apigateway:<region>:lambda:path/2015-03-31/functions/
+arn:aws:lambda:<region>:<account-id>:function:my-first-function:${stageVariables.lambdaAlias}/invocations
+```
+
+Now `dev` stage calls `my-first-function:dev` alias and `prod` calls `my-first-function:prod`.
+
+> Remember to grant API Gateway permission to invoke each alias separately.
+
+---
+
+**Step 4 — Use stage variables in mapping templates**
+
+```velocity
+## Read log level from stage variable
+#set($logLevel = "$stageVariables.logLevel")
+{
+  "logLevel": "$logLevel",
+  "body": $input.json('$')
+}
+```
+
+---
+
+**Deployment workflow:**
+
+```
+Make API config changes
+        │
+        ▼
+Actions → Deploy API
+        │
+        ├─► Stage: dev    (test here first)
+        │
+        ├─► Stage: staging  (integration tests)
+        │
+        └─► Stage: prod   (after approval)
+
+Each deployment is immutable — you can roll back to a previous deployment:
+Stages → prod → Deployment History → select older deployment → Restore
+```
+
+---
+
+### CORS Configuration
+
+**HANDS-ON — Enable browser clients to call your API (10 min)**
+
+CORS (Cross-Origin Resource Sharing) is required whenever a browser calls an API on a different domain.
+
+**Navigate:** API Gateway → `items-api` → Resources → select `/items`
+
+---
+
+**Step 1 — Enable CORS via the console**
+
+1. Select resource `/items` → **Actions** → **Enable CORS**
+2. Configure:
+
+| Field | Value |
+| ----- | ----- |
+| Access-Control-Allow-Methods | `GET,POST,OPTIONS` |
+| Access-Control-Allow-Headers | `Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token` |
+| Access-Control-Allow-Origin | `*` *(use specific domain in production: `https://yourapp.com`)* |
+
+3. Click **Enable CORS and replace existing CORS headers** → **Yes, replace existing values**
+
+This creates an **OPTIONS** method on `/items` that returns the CORS pre-flight response.
+
+---
+
+**Step 2 — Return CORS headers from Lambda**
+
+For proxy integration, Lambda must also return the CORS headers in every response:
+
+```python
+def build_response(status_code: int, body: dict) -> dict:
+    return {
+        "statusCode": status_code,
+        "headers": {
+            "Content-Type": "application/json",
+            "Access-Control-Allow-Origin":  "*",         # or specific origin
+            "Access-Control-Allow-Headers": "Content-Type,Authorization,X-Api-Key",
+            "Access-Control-Allow-Methods": "GET,POST,PUT,DELETE,OPTIONS"
+        },
+        "body": json.dumps(body)
+    }
+
+def lambda_handler(event, context):
+    if event['httpMethod'] == 'OPTIONS':
+        return build_response(200, {})            # pre-flight response
+
+    # ... your actual logic ...
+    return build_response(200, {"items": []})
+```
+
+---
+
+**How CORS works with API Gateway:**
+
+```
+Browser (https://yourapp.com)
+        │
+        │── OPTIONS /items ──────────────────────────────────────►│
+        │   Origin: https://yourapp.com                           │
+        │   Access-Control-Request-Method: POST                   │  API Gateway
+        │                                                         │
+        │◄─ 200 OK ───────────────────────────────────────────────│
+        │   Access-Control-Allow-Origin: https://yourapp.com      │
+        │   Access-Control-Allow-Methods: GET,POST                │
+        │                                                         │
+        │── POST /items ───────────────────────────────────────────►│ (actual request)
+        │◄─ 200 OK + Access-Control-Allow-Origin ─────────────────│
+```
+
+---
+
+### Monitoring & Logging
+
+**HANDS-ON — Set up access logging and CloudWatch metrics (10 min)**
+
+**Navigate:** API Gateway → `items-api` → Stages → `prod`
+
+---
+
+**Step 1 — Enable CloudWatch logging**
+
+1. Stage `prod` → **Logs/Tracing** tab
+2. **CloudWatch Settings:**
+
+| Field | Value |
+| ----- | ----- |
+| Enable CloudWatch Logs | ✓ |
+| Log level | `INFO` *(use `ERROR` in prod to reduce noise and cost)* |
+| Log full requests/responses data | ✓ *(disable in prod — logs request/response bodies)* |
+| Enable Detailed CloudWatch Metrics | ✓ |
+
+3. **X-Ray Tracing:** Enable ✓
+4. **Save Changes**
+
+---
+
+**Step 2 — Configure Access Logging**
+
+Access logs give you one line per request in a structured format — essential for debugging and audit.
+
+1. Same **Logs/Tracing** tab → **Custom Access Logging**
+2. Create a CloudWatch log group: `API-Gateway-Access-Logs-items-api-prod`
+3. Copy the ARN into **ARN of a log group**
+4. **Log Format** — paste this JSON format:
+
+```json
+{
+  "requestId":      "$context.requestId",
+  "ip":             "$context.identity.sourceIp",
+  "caller":         "$context.identity.caller",
+  "user":           "$context.identity.user",
+  "requestTime":    "$context.requestTime",
+  "httpMethod":     "$context.httpMethod",
+  "resourcePath":   "$context.resourcePath",
+  "status":         "$context.status",
+  "protocol":       "$context.protocol",
+  "responseLength": "$context.responseLength",
+  "integrationLatency": "$context.integrationLatency",
+  "responseLatency":    "$context.responseLatency",
+  "errorMessage":       "$context.error.message"
+}
+```
+
+5. **Save Changes** → re-deploy
+
+---
+
+**Key CloudWatch metrics for API Gateway:**
+
+| Metric | What it measures | Alarm threshold |
+| ------ | ---------------- | --------------- |
+| `Count` | Total API calls | Baseline ± 2 std deviations |
+| `4XXError` | Client errors (bad request, auth fail) | > 5% of Count |
+| `5XXError` | Server errors (Lambda failure, timeout) | > 1% of Count |
+| `Latency` | Full round-trip time (ms) | p99 > 3000 ms |
+| `IntegrationLatency` | Time spent in Lambda (ms) | p99 > 2000 ms |
+| `CacheHitCount` | Requests served from cache | Monitor if caching enabled |
+| `CacheMissCount` | Requests that missed cache | Monitor if caching enabled |
+
+---
+
+**Step 3 — Create a 5XX alarm**
+
+```bash
+aws cloudwatch put-metric-alarm \
+  --alarm-name "items-api-5xx-errors" \
+  --metric-name 5XXError \
+  --namespace AWS/ApiGateway \
+  --dimensions Name=ApiName,Value=items-api Name=Stage,Value=prod \
+  --statistic Sum \
+  --period 60 \
+  --threshold 5 \
+  --comparison-operator GreaterThanOrEqualToThreshold \
+  --evaluation-periods 1 \
+  --alarm-actions arn:aws:sns:<region>:<account-id>:alerts-topic
+```
+
+---
+
+**Query access logs with CloudWatch Insights:**
+
+```
+# Top 10 slowest requests
+fields requestId, httpMethod, resourcePath, responseLatency, status
+| sort responseLatency desc
+| limit 10
+
+# Error rate by resource path
+filter status >= 400
+| stats count() as errors by resourcePath
+| sort errors desc
+
+# Requests from a specific IP
+filter ip = "203.0.113.42"
+| fields requestTime, httpMethod, resourcePath, status
+| sort requestTime desc
+```
+
+---
+
+### API Gateway Best Practices
+
+**Category 1 — Security**
+
+| Rule | Why | How |
+| ---- | --- | --- |
+| Always use HTTPS | Data in transit protection | Enforced by default — never disable |
+| Use a custom domain with ACM certificate | Hides API IDs and region from URLs | API Gateway → Custom Domain Names → attach ACM cert |
+| Enable WAF on production APIs | Protect against SQLi, XSS, bad bots | Associate an AWS WAF Web ACL with the stage |
+| Least-privilege Lambda execution role | Limits blast radius if Lambda is compromised | IAM → function role → minimal required permissions only |
+| Never log full request/response bodies in prod | Bodies may contain PII or secrets | Set log level to `ERROR`; disable full data logging |
+| Use resource policies to restrict API access | Whitelist specific IPs or VPCs | API Gateway → Resource Policy → attach condition on `aws:SourceIp` |
+
+**Category 2 — Performance**
+
+| Rule | Why | How |
+| ---- | --- | --- |
+| Enable API Gateway caching for read-heavy endpoints | Serve responses from cache — no Lambda invocation | Stage → Method Settings → enable cache (512 MB – 237 GB) |
+| Set cache TTL per method | Avoid stale data on fast-changing endpoints | Method Settings → Cache TTL in seconds (default 300) |
+| Use HTTP API instead of REST API for simple proxy | HTTP API is ~70% cheaper and lower latency | Only switch if you don't need validation, usage plans, or caching |
+| Use Lambda Provisioned Concurrency behind API Gateway | Eliminate cold start latency on user-facing endpoints | Lambda → Aliases → Provisioned Concurrency |
+| Compress responses | Reduce bandwidth; faster client rendering | API Gateway → API Settings → Enable Content Encoding (min 1024 bytes) |
+
+**Category 3 — Reliability**
+
+| Rule | Why | How |
+| ---- | --- | --- |
+| Set conservative throttle limits at the stage level | Protects downstream Lambda and databases | Stage → Default Method Throttling → rate + burst |
+| Add tighter per-method throttles on expensive operations | Prevents one slow endpoint from consuming all concurrency | Stage → Method Overrides |
+| Always use deployment stages | Lets you test before pushing to prod | Never deploy directly to `prod`; always test on `dev` first |
+| Use canary deployments for risky changes | Route a % of prod traffic to the new deployment | Stage → Canary tab → set % weight |
+| Monitor and alarm on 5XX and 4XX rates | Silent failures compound; catch them early | CloudWatch alarms on `5XXError > 1%` and `4XXError > 5%` |
+
+**Category 4 — Cost**
+
+| Rule | Why | How |
+| ---- | --- | --- |
+| Use HTTP API for simple proxy use-cases | ~70% cheaper than REST API per million requests | Evaluate features needed before choosing REST API |
+| Enable caching on frequently called read endpoints | Each cache hit saves a Lambda invocation | Cache cost < Lambda cost at high RPS |
+| Delete unused stages and APIs | Idle APIs still incur data transfer costs | Audit monthly; delete anything not receiving traffic |
+| Set usage plan quotas for external callers | Prevents a runaway client from driving up your bill | Usage Plans → Quota → set monthly cap |
+
+---
+
+**Common interview questions:**
+
+| Question | Answer |
+| -------- | ------ |
+| What is the difference between REST API and HTTP API in API Gateway? | REST API has the full feature set: request validation, usage plans, caching, custom domain names, WAF integration, and mapping templates. HTTP API is a lighter, cheaper option (up to 70% less cost) that supports JWT/OIDC auth and Lambda proxy but lacks usage plans, caching, and request validation. |
+| How does a Lambda Authorizer work? | API Gateway invokes a separate Lambda function before calling the backend. The authorizer receives the request token/headers, validates them, and returns an IAM policy (Allow or Deny). The policy is cached for a configurable TTL to avoid calling the authorizer on every request. |
+| What happens when API Gateway throttles a request? | The client receives a `429 Too Many Requests` response immediately. The request does not reach the backend Lambda. Throttle limits are applied at account, stage, usage plan, and method levels in that order. |
+| How do stage variables work? | Stage variables are key-value pairs scoped to a deployment stage. They are referenced as `${stageVariables.variableName}` in integration URIs and mapping templates. A common pattern is pointing `dev` stage at a `dev` Lambda alias and `prod` at a `prod` alias using the same API config. |
+| How do you prevent your API from being called from unauthorised origins in a browser? | CORS headers control which origins a browser allows. Set `Access-Control-Allow-Origin` to the specific allowed domain (not `*` in production). Also configure an OPTIONS pre-flight method. Note: CORS only protects browser clients — server-to-server calls bypass it entirely. |
+| What is the difference between throttling at the stage level vs. usage plan level? | Stage-level throttling applies to all callers equally. Usage plan throttling is per API Key — different clients can have different rate limits. Usage plans also add quota (monthly request cap) which stage-level throttling does not provide. |
+| How do you roll back a bad API Gateway deployment? | Each deployment is immutable and stored in Deployment History. Go to Stages → select the stage → Deployment History tab → select an older deployment → Restore. This is instant with no downtime. |
+| How would you secure an internal API that should only be called from within a VPC? | Use a VPC Endpoint (Interface endpoint for API Gateway) and attach a Resource Policy to the API that denies any request not originating from the VPC endpoint (`aws:sourceVpce` condition). Set the endpoint type to Private. |
+
+---
+
+### Reference
+
+**Clean up resources (to avoid charges)**
+
+**Step 1 — Delete the API**
+- API Gateway → select `items-api` → **Actions** → **Delete API** → confirm
+
+**Step 2 — Delete Usage Plans and API Keys**
+- API Gateway → **Usage Plans** → select `standard-plan` → **Delete**
+- API Gateway → **API Keys** → select all created keys → **Delete**
+
+**Step 3 — Delete Lambda Authorizer function**
+- Lambda → select `my-authorizer-function` → **Actions** → **Delete**
+
+**Step 4 — Delete CloudWatch Log Groups**
+- CloudWatch → **Log groups** → select `API-Gateway-Access-Logs-items-api-prod` → **Actions** → **Delete log group(s)**
+
+**Step 5 — Delete CloudWatch Alarms**
+- CloudWatch → **Alarms** → select `items-api-5xx-errors` → **Actions** → **Delete**
+
+**Step 6 — Delete Cognito User Pool (if created)**
+- Cognito → **User Pools** → select your pool → **Delete**
+
+**Verify:** API Gateway → **APIs** — `items-api` no longer listed ✓
+
+---
+
+**Official documentation:**
+
+→ [Amazon API Gateway — Developer Guide](https://docs.aws.amazon.com/apigateway/latest/developerguide/welcome.html)
+
+→ [Choosing between REST, HTTP, and WebSocket APIs](https://docs.aws.amazon.com/apigateway/latest/developerguide/http-api-vs-rest.html)
+
+→ [Lambda Proxy Integration](https://docs.aws.amazon.com/apigateway/latest/developerguide/set-up-lambda-proxy-integrations.html)
+
+→ [API Gateway Lambda Authorizers](https://docs.aws.amazon.com/apigateway/latest/developerguide/apigateway-use-lambda-authorizer.html)
+
+→ [Using Cognito User Pools as an Authorizer](https://docs.aws.amazon.com/apigateway/latest/developerguide/apigateway-integrate-with-cognito.html)
+
+→ [API Gateway Throttling and Usage Plans](https://docs.aws.amazon.com/apigateway/latest/developerguide/api-gateway-request-throttling.html)
+
+→ [Enabling CORS for a REST API](https://docs.aws.amazon.com/apigateway/latest/developerguide/how-to-cors.html)
+
+→ [API Gateway Access Logging](https://docs.aws.amazon.com/apigateway/latest/developerguide/set-up-logging.html)
+
+→ [API Gateway Canary Deployments](https://docs.aws.amazon.com/apigateway/latest/developerguide/canary-release.html)
 
 ---
 
