@@ -203,6 +203,19 @@
   - [Monitoring & Logging](#monitoring--logging)
   - [API Gateway Best Practices](#api-gateway-best-practices)
   - [Reference](#reference-5)
+- [DynamoDB Basics](#dynamodb-basics)
+  - [One Shot Revision](#one-shot-revision-16)
+  - [DynamoDB Overview](#dynamodb-overview)
+  - [Creating Your First Table](#creating-your-first-table)
+  - [Data Modelling & Key Design](#data-modelling--key-design)
+  - [Reading & Writing Data](#reading--writing-data)
+  - [Indexes — GSI & LSI](#indexes--gsi--lsi)
+  - [DynamoDB Streams](#dynamodb-streams)
+  - [TTL & Automatic Expiry](#ttl--automatic-expiry)
+  - [Capacity Modes & Auto Scaling](#capacity-modes--auto-scaling)
+  - [DynamoDB Security](#dynamodb-security)
+  - [DynamoDB Best Practices](#dynamodb-best-practices)
+  - [Reference](#reference-6)
 - [Useful Tips & Tricks](#useful-tips--tricks)
 - [References](#references)
 
@@ -10250,6 +10263,1015 @@ filter ip = "203.0.113.42"
 → [API Gateway Access Logging](https://docs.aws.amazon.com/apigateway/latest/developerguide/set-up-logging.html)
 
 → [API Gateway Canary Deployments](https://docs.aws.amazon.com/apigateway/latest/developerguide/canary-release.html)
+
+---
+
+## DynamoDB Basics
+
+**What you will build in this section:**
+You will build a production-ready DynamoDB data layer — from table creation through advanced indexing, streams, and security. By the end you will have real working systems that:
+- Store and retrieve items using optimised partition and sort key designs
+- Query efficiently without full table scans using GSIs and LSIs
+- Trigger Lambda functions in real time via DynamoDB Streams
+- Expire stale data automatically using TTL
+- Switch between On-Demand and Provisioned capacity with Auto Scaling
+- Lock down access with fine-grained IAM and VPC endpoint policies
+
+**Architecture of what we're building:**
+
+```
+  Application / Lambda / API Gateway
+           │
+           ▼
+    [DynamoDB Table: items]
+    ┌───────────────────────────────────────────────┐
+    │  Partition Key: userId  Sort Key: itemId       │
+    │                                               │
+    │  ┌─────────────┐   ┌──────────────────────┐  │
+    │  │ GSI: by     │   │ LSI: by createdAt     │  │
+    │  │ category    │   │ (same partition key)  │  │
+    │  └─────────────┘   └──────────────────────┘  │
+    │                                               │
+    │  TTL attribute: expiresAt                     │
+    └──────────────────────┬────────────────────────┘
+                           │ DynamoDB Stream
+                           ▼
+                   [Lambda Function]
+                           │
+              ┌────────────┴────────────┐
+              ▼                         ▼
+     [EventBridge / SNS]        [CloudWatch Logs]
+```
+
+**The things we'll build — in order:**
+
+```
+1. Overview  →  2. Create Table  →  3. Data Modelling  →  4. Read & Write
+      │
+5. Indexes (GSI/LSI)  →  6. Streams  →  7. TTL  →  8. Capacity Modes
+      │
+9. Security  →  10. Best Practices  →  11. Reference
+```
+
+**Prerequisites — check these before starting:**
+- [ ] Completed the Lambda Functions section (handlers and event-driven patterns)
+- [ ] Basic understanding of JSON and key-value data structures
+- [ ] IAM role or user with `AmazonDynamoDBFullAccess` or equivalent
+
+---
+
+### One Shot Revision
+
+| Step | Topic | What you do |
+| ---- | ----- | ----------- |
+| 1 | [DynamoDB Overview](#dynamodb-overview) | Understand the core data model: tables, items, attributes, and key types |
+| 2 | [Creating Your First Table](#creating-your-first-table) | Create an `items` table with partition and sort key via console and CLI |
+| 3 | [Data Modelling & Key Design](#data-modelling--key-design) | Design access patterns first; choose partition/sort keys to avoid hot partitions |
+| 4 | [Reading & Writing Data](#reading--writing-data) | Use PutItem, GetItem, Query, Scan, BatchWrite, and conditional writes |
+| 5 | [Indexes — GSI & LSI](#indexes--gsi--lsi) | Add Global and Local Secondary Indexes to support extra query patterns |
+| 6 | [DynamoDB Streams](#dynamodb-streams) | Capture item changes and trigger Lambda in near-real-time |
+| 7 | [TTL & Automatic Expiry](#ttl--automatic-expiry) | Mark items with an expiry timestamp; DynamoDB deletes them automatically |
+| 8 | [Capacity Modes & Auto Scaling](#capacity-modes--auto-scaling) | Choose On-Demand vs Provisioned; configure Auto Scaling for provisioned tables |
+| 9 | [DynamoDB Security](#dynamodb-security) | Encrypt at rest, restrict access with fine-grained IAM, and use VPC endpoints |
+| 10 | [DynamoDB Best Practices](#dynamodb-best-practices) | Production rules for key design, cost, and reliability |
+| 11 | [Reference](#reference-6) | Clean up all resources + official docs |
+
+---
+
+### DynamoDB Overview
+
+**Read this first — understand the data model before creating tables.**
+
+DynamoDB is a fully managed, serverless NoSQL key-value and document database. It delivers single-digit millisecond performance at any scale and requires zero server management.
+
+```
+┌────────────────────────────────────────────────────────────────────────┐
+│                 DynamoDB — Core Concepts                               │
+│                                                                        │
+│  Table            Item               Attribute                         │
+│  ──────────────   ─────────────────  ─────────────────────            │
+│  Container for    A single record    A name-value pair                 │
+│  items. Similar   (like a row in     within an item.                   │
+│  to a DB table,   SQL). No fixed     No schema — each item             │
+│  but schema-less  schema required.   can have different attrs.         │
+│                                                                        │
+│  Primary Key Types                                                     │
+│  ─────────────────────────────────────────────────────────────────    │
+│  Simple (Partition Key only)    Composite (Partition Key + Sort Key)   │
+│  • userId → unique per item     • userId + createdAt → multiple        │
+│  • Best for direct lookups      items per user, sorted by date         │
+│                                                                        │
+│  Capacity Modes                                                        │
+│  ─────────────────────────────────────────────────────────────────    │
+│  On-Demand                      Provisioned                            │
+│  • Pay per request              • Set RCU / WCU in advance            │
+│  • No capacity planning         • Cheaper at predictable load          │
+│  • Instant scale                • Auto Scaling available               │
+└────────────────────────────────────────────────────────────────────────┘
+```
+
+**Key concepts:**
+
+| Concept | What it is | Why it matters |
+| ------- | ----------- | -------------- |
+| **Partition Key** | Hash key — determines which physical partition stores the item | Chosen poorly → hot partitions → throttling |
+| **Sort Key** | Range key — orders items within the same partition | Enables range queries (`begins_with`, `between`, `<`, `>`) |
+| **RCU** | Read Capacity Unit — 1 strongly consistent read of ≤ 4 KB/s | Used to calculate provisioned read throughput |
+| **WCU** | Write Capacity Unit — 1 write of ≤ 1 KB/s | Used to calculate provisioned write throughput |
+| **GSI** | Global Secondary Index — alternate partition + sort key | Query on non-key attributes without scanning the table |
+| **LSI** | Local Secondary Index — same partition key, different sort key | Range query on a different attribute within the same partition |
+| **Stream** | Ordered record of item-level changes (INSERT / MODIFY / REMOVE) | Triggers Lambda for real-time processing |
+| **TTL** | A timestamp attribute; DynamoDB deletes the item when the time passes | Automatic cleanup of session, cache, or temporary data |
+
+---
+
+### Creating Your First Table
+
+**HANDS-ON — Create a `items` table with partition and sort key (10 min)**
+
+**Navigate:** DynamoDB → **Create table**
+
+---
+
+**Step 1 — Configure the table**
+
+| Field | Value |
+| ----- | ----- |
+| Table name | `items` |
+| Partition key | `userId` (String) |
+| Sort key | `itemId` (String) |
+| Table settings | Customise settings |
+| Capacity mode | **On-demand** *(easiest to start; no capacity planning needed)* |
+| Encryption at rest | AWS owned key *(default — free)* |
+
+Click **Create table** and wait for status to show **Active**.
+
+---
+
+**Step 2 — Add your first item via Console**
+
+1. DynamoDB → **Tables** → `items` → **Explore table items** → **Create item**
+2. Switch to JSON view and paste:
+
+```json
+{
+  "userId": {"S": "user-001"},
+  "itemId": {"S": "item-abc"},
+  "name":   {"S": "Wireless Keyboard"},
+  "price":  {"N": "49.99"},
+  "category": {"S": "electronics"},
+  "createdAt": {"N": "1700000000"},
+  "expiresAt": {"N": "1800000000"}
+}
+```
+
+3. Click **Create item**
+
+---
+
+**Step 3 — Create the table with AWS CLI**
+
+```bash
+# Create table
+aws dynamodb create-table \
+  --table-name items \
+  --attribute-definitions \
+      AttributeName=userId,AttributeType=S \
+      AttributeName=itemId,AttributeType=S \
+  --key-schema \
+      AttributeName=userId,KeyType=HASH \
+      AttributeName=itemId,KeyType=RANGE \
+  --billing-mode PAY_PER_REQUEST \
+  --region us-east-1
+
+# Wait until ACTIVE
+aws dynamodb wait table-exists --table-name items
+
+# Describe the table
+aws dynamodb describe-table --table-name items --query "Table.TableStatus"
+```
+
+---
+
+**Step 4 — Write and read an item with CLI**
+
+```bash
+# PutItem
+aws dynamodb put-item \
+  --table-name items \
+  --item '{
+    "userId":    {"S": "user-001"},
+    "itemId":    {"S": "item-abc"},
+    "name":      {"S": "Wireless Keyboard"},
+    "price":     {"N": "49.99"},
+    "category":  {"S": "electronics"}
+  }'
+
+# GetItem (exact primary key lookup — fastest read possible)
+aws dynamodb get-item \
+  --table-name items \
+  --key '{
+    "userId": {"S": "user-001"},
+    "itemId": {"S": "item-abc"}
+  }'
+```
+
+---
+
+**Common mistakes at this stage:**
+
+| Mistake | Symptom | Fix |
+| ------- | ------- | --- |
+| Using `Scan` for all reads | Full table read → high RCU cost, slow at scale | Use `Query` with partition key whenever possible |
+| Choosing a low-cardinality partition key (e.g. `status`) | Hot partitions → `ProvisionedThroughputExceededException` | Use a high-cardinality attribute like `userId` or `orderId` |
+| Forgetting sort key in `GetItem` when table has one | `ValidationException` | Always provide both partition key AND sort key for exact lookups |
+| Putting items larger than 400 KB | `ValidationException: Item size exceeds maximum allowed size` | Store large payloads in S3; store only the S3 reference in DynamoDB |
+
+---
+
+### Data Modelling & Key Design
+
+**Design your access patterns FIRST — then choose your keys. DynamoDB has no joins.**
+
+```
+SQL approach (wrong for DynamoDB):          DynamoDB approach (correct):
+─────────────────────────────────           ──────────────────────────────
+1. Design normalised tables                 1. List all access patterns up front
+2. Write queries to join them               2. Denormalise — store data in the
+3. Add indexes later if slow                   shape you will read it
+                                            3. Choose keys that serve those patterns
+                                            4. Add GSIs/LSIs for remaining patterns
+```
+
+**Step-by-step key design process:**
+
+```
+Step 1 — List access patterns:
+  • Get all items for a user           → Query by userId
+  • Get a single item                  → GetItem by userId + itemId
+  • Get all items in a category        → GSI on category
+  • Get items created in a date range  → Sort key = createdAt
+
+Step 2 — Choose primary key:
+  Partition key:  userId      (high cardinality — many distinct users)
+  Sort key:       itemId      (unique per user → composite key is globally unique)
+
+Step 3 — Access patterns not served by primary key → add GSIs
+  Pattern: all items in "electronics"
+  → GSI partition key: category    Sort key: createdAt
+```
+
+**Common key design patterns:**
+
+| Pattern | Partition Key | Sort Key | Use case |
+| ------- | ------------- | -------- | -------- |
+| One entity per row | `entityId` | — | Simple lookup by ID |
+| One-to-many | `parentId` | `childId` | User → Orders |
+| Time-series | `deviceId` | `timestamp` | IoT sensor readings |
+| Adjacency list | `PK` (e.g. `USER#id`) | `SK` (e.g. `ORDER#id`) | Graphs, multi-entity tables |
+| Single-table design | Generic `PK` | Generic `SK` | All entities in one table; different prefix per type |
+
+**Single-table design example — all entities in one table:**
+
+```
+Table: app-data
+
+PK              SK                  Attributes
+──────────────  ──────────────────  ───────────────────────
+USER#user-001   PROFILE             name, email, createdAt
+USER#user-001   ORDER#ord-1         total, status
+USER#user-001   ORDER#ord-2         total, status
+ORDER#ord-1     ITEM#item-abc       qty, price
+ORDER#ord-1     ITEM#item-xyz       qty, price
+```
+
+> Single-table design eliminates cross-table joins and reduces round-trips but increases query complexity. Use it when you have well-defined, stable access patterns.
+
+---
+
+### Reading & Writing Data
+
+**HANDS-ON — All the core DynamoDB operations with real examples (15 min)**
+
+---
+
+**Write operations:**
+
+```python
+import boto3
+
+dynamodb = boto3.resource('dynamodb')
+table = dynamodb.Table('items')
+
+# PutItem — create or overwrite
+table.put_item(Item={
+    'userId':    'user-001',
+    'itemId':    'item-abc',
+    'name':      'Wireless Keyboard',
+    'price':     49.99,
+    'category':  'electronics',
+    'createdAt': 1700000000
+})
+
+# UpdateItem — update specific attributes (does NOT overwrite the whole item)
+table.update_item(
+    Key={'userId': 'user-001', 'itemId': 'item-abc'},
+    UpdateExpression='SET price = :p, #n = :name',
+    ExpressionAttributeNames={'#n': 'name'},     # 'name' is reserved — use alias
+    ExpressionAttributeValues={':p': 39.99, ':name': 'Mechanical Keyboard'}
+)
+
+# DeleteItem
+table.delete_item(Key={'userId': 'user-001', 'itemId': 'item-abc'})
+
+# Conditional write — only write if item does not already exist
+table.put_item(
+    Item={'userId': 'user-001', 'itemId': 'item-new', 'name': 'Mouse'},
+    ConditionExpression='attribute_not_exists(itemId)'
+)
+```
+
+---
+
+**Read operations:**
+
+```python
+# GetItem — exact primary key lookup (always use this when you have both keys)
+response = table.get_item(
+    Key={'userId': 'user-001', 'itemId': 'item-abc'},
+    ConsistentRead=True   # strongly consistent — use for financial or critical data
+)
+item = response.get('Item')
+
+# Query — all items for a user (uses partition key — efficient)
+response = table.query(
+    KeyConditionExpression=Key('userId').eq('user-001')
+)
+
+# Query with sort key range — items created after a timestamp
+from boto3.dynamodb.conditions import Key
+response = table.query(
+    KeyConditionExpression=(
+        Key('userId').eq('user-001') &
+        Key('createdAt').gt(1699000000)
+    )
+)
+
+# Scan — reads EVERY item in the table (avoid in production at scale)
+response = table.scan(
+    FilterExpression=Attr('category').eq('electronics')
+)
+# FilterExpression does NOT reduce RCU consumed — all items are read first
+```
+
+---
+
+**Batch operations (reduce round-trips):**
+
+```python
+# BatchWriteItem — up to 25 PutItem or DeleteItem in one call
+with table.batch_writer() as batch:
+    for i in range(100):
+        batch.put_item(Item={
+            'userId': 'user-001',
+            'itemId': f'item-{i:03d}',
+            'price':  i * 1.5
+        })
+# boto3 batch_writer handles chunking, retries, and UnprocessedItems automatically
+
+# BatchGetItem — up to 100 items in one call
+response = dynamodb.batch_get_item(
+    RequestItems={
+        'items': {
+            'Keys': [
+                {'userId': {'S': 'user-001'}, 'itemId': {'S': 'item-001'}},
+                {'userId': {'S': 'user-001'}, 'itemId': {'S': 'item-002'}},
+            ]
+        }
+    }
+)
+```
+
+---
+
+**Read consistency explained:**
+
+| Type | RCU cost | When to use |
+| ---- | -------- | ----------- |
+| Eventually consistent (default) | 0.5 RCU per 4 KB | Most reads — data might be up to 1 second behind |
+| Strongly consistent | 1 RCU per 4 KB | Financial records, inventory counts, anything where stale data is unacceptable |
+| Transactional (`TransactGet`) | 2 RCU per 4 KB | ACID reads across multiple items |
+
+---
+
+### Indexes — GSI & LSI
+
+**HANDS-ON — Add indexes to support extra query patterns without scanning (15 min)**
+
+---
+
+**Global Secondary Index (GSI) — different partition key + optional sort key**
+
+A GSI lets you query on attributes that are NOT the table's primary key.
+
+**When to use:** You need to query by `category` across ALL users — not just within one user's partition.
+
+**Step 1 — Create a GSI via Console**
+
+DynamoDB → `items` → **Indexes** tab → **Create index**
+
+| Field | Value |
+| ----- | ----- |
+| Partition key | `category` (String) |
+| Sort key | `createdAt` (Number) |
+| Index name | `category-createdAt-index` |
+| Attribute projections | **All** *(copies all attributes into the GSI)* |
+| Capacity mode | Same as table |
+
+Click **Create index** — status shows **Creating** then **Active** (takes 1–2 min).
+
+**Step 2 — Query the GSI**
+
+```python
+# Get all electronics, sorted by createdAt descending
+response = table.query(
+    IndexName='category-createdAt-index',
+    KeyConditionExpression=Key('category').eq('electronics'),
+    ScanIndexForward=False   # descending order on sort key
+)
+```
+
+**Step 3 — Create GSI with CLI**
+
+```bash
+aws dynamodb update-table \
+  --table-name items \
+  --attribute-definitions \
+      AttributeName=category,AttributeType=S \
+      AttributeName=createdAt,AttributeType=N \
+  --global-secondary-index-updates '[{
+    "Create": {
+      "IndexName": "category-createdAt-index",
+      "KeySchema": [
+        {"AttributeName": "category", "KeyType": "HASH"},
+        {"AttributeName": "createdAt", "KeyType": "RANGE"}
+      ],
+      "Projection": {"ProjectionType": "ALL"},
+      "BillingMode": "PAY_PER_REQUEST"
+    }
+  }]'
+```
+
+---
+
+**Local Secondary Index (LSI) — same partition key, different sort key**
+
+An LSI lets you sort items in the same partition on a different attribute.
+
+**Key constraint:** LSIs must be defined at table creation time — they cannot be added later.
+
+**When to use:** You query items for a single user but want to sort by `price` instead of `itemId`.
+
+```bash
+# LSI must be created with the table — cannot be added after
+aws dynamodb create-table \
+  --table-name items-v2 \
+  --attribute-definitions \
+      AttributeName=userId,AttributeType=S \
+      AttributeName=itemId,AttributeType=S \
+      AttributeName=price,AttributeType=N \
+  --key-schema \
+      AttributeName=userId,KeyType=HASH \
+      AttributeName=itemId,KeyType=RANGE \
+  --local-secondary-indexes '[{
+    "IndexName": "userId-price-index",
+    "KeySchema": [
+      {"AttributeName": "userId",  "KeyType": "HASH"},
+      {"AttributeName": "price",   "KeyType": "RANGE"}
+    ],
+    "Projection": {"ProjectionType": "ALL"}
+  }]' \
+  --billing-mode PAY_PER_REQUEST
+```
+
+```python
+# Query LSI — items for user-001 sorted by price ascending
+response = table.query(
+    IndexName='userId-price-index',
+    KeyConditionExpression=Key('userId').eq('user-001'),
+    ScanIndexForward=True   # ascending price
+)
+```
+
+---
+
+**GSI vs LSI — quick comparison:**
+
+| Feature | GSI | LSI |
+| ------- | --- | --- |
+| Partition key | Different from table | Must be same as table |
+| Sort key | Optional | Different from table |
+| Created when | Any time (added later) | Table creation only |
+| Max per table | 20 | 5 |
+| Storage | Separate partition space | Shares table partition |
+| Consistency | Eventually consistent only | Strongly consistent supported |
+| Use case | Query by any non-key attribute | Range queries within a partition |
+
+---
+
+### DynamoDB Streams
+
+**HANDS-ON — Capture item changes and trigger Lambda in real time (10 min)**
+
+DynamoDB Streams records every write (INSERT, MODIFY, REMOVE) to your table as an ordered sequence of stream records. Lambda can consume this stream in near-real-time.
+
+```
+Item changed in DynamoDB table
+        │
+        ▼
+  DynamoDB Stream (ordered shard log)
+        │
+        ▼  (event source mapping — managed by Lambda)
+  Lambda Function
+        │
+   ┌────┴────┐
+   ▼         ▼
+Replication  Notifications / analytics
+```
+
+---
+
+**Step 1 — Enable Streams on the table**
+
+DynamoDB → `items` → **Exports and streams** tab → **DynamoDB stream details** → **Enable**
+
+| Field | Value |
+| ----- | ----- |
+| View type | **New and old images** *(captures both before and after state of each item)* |
+
+Click **Enable stream**.
+
+Or with CLI:
+
+```bash
+aws dynamodb update-table \
+  --table-name items \
+  --stream-specification StreamEnabled=true,StreamViewType=NEW_AND_OLD_IMAGES
+```
+
+---
+
+**Step 2 — Create the Lambda consumer**
+
+```python
+import json
+
+def lambda_handler(event, context):
+    for record in event['Records']:
+        event_name = record['eventName']   # INSERT | MODIFY | REMOVE
+
+        if event_name == 'INSERT':
+            new_item = record['dynamodb']['NewImage']
+            print(f"New item created: {new_item}")
+
+        elif event_name == 'MODIFY':
+            old_item = record['dynamodb']['OldImage']
+            new_item = record['dynamodb']['NewImage']
+            print(f"Item updated — old: {old_item}, new: {new_item}")
+
+        elif event_name == 'REMOVE':
+            old_item = record['dynamodb']['OldImage']
+            print(f"Item deleted: {old_item}")
+
+    return {'statusCode': 200}
+```
+
+---
+
+**Step 3 — Add the event source mapping**
+
+Lambda → your function → **Configuration** → **Triggers** → **Add trigger**
+
+| Field | Value |
+| ----- | ----- |
+| Trigger | DynamoDB |
+| DynamoDB table | `items` |
+| Batch size | `100` *(process up to 100 records per Lambda invocation)* |
+| Starting position | **Latest** *(only process new changes, not historical)* |
+| Retry attempts | `3` |
+| Destination on failure | SQS or SNS ARN *(recommended — catch failed batches)* |
+
+Or with CLI:
+
+```bash
+# Get stream ARN
+STREAM_ARN=$(aws dynamodb describe-table \
+  --table-name items \
+  --query "Table.LatestStreamArn" --output text)
+
+# Create event source mapping
+aws lambda create-event-source-mapping \
+  --function-name my-stream-processor \
+  --event-source-arn "$STREAM_ARN" \
+  --batch-size 100 \
+  --starting-position LATEST
+```
+
+**Stream view types:**
+
+| View type | What is captured | Use case |
+| --------- | ---------------- | -------- |
+| `KEYS_ONLY` | Only primary key attributes | Lightweight triggers; fetch full item from table |
+| `NEW_IMAGE` | Entire item after the change | Replication, caching invalidation |
+| `OLD_IMAGE` | Entire item before the change | Audit trail, undo operations |
+| `NEW_AND_OLD_IMAGES` | Both before and after | Change detection, delta processing |
+
+---
+
+### TTL & Automatic Expiry
+
+**HANDS-ON — Automatically delete expired items without any application code (5 min)**
+
+TTL lets you set an expiry timestamp on each item. DynamoDB scans for expired items every few minutes and deletes them — at no extra cost and with no impact on table throughput.
+
+---
+
+**Step 1 — Enable TTL on the table**
+
+DynamoDB → `items` → **Additional settings** tab → **Time to live (TTL)** → **Enable**
+
+| Field | Value |
+| ----- | ----- |
+| TTL attribute name | `expiresAt` |
+
+Click **Enable TTL**.
+
+Or with CLI:
+
+```bash
+aws dynamodb update-time-to-live \
+  --table-name items \
+  --time-to-live-specification "Enabled=true, AttributeName=expiresAt"
+```
+
+---
+
+**Step 2 — Write items with a TTL value**
+
+The `expiresAt` attribute must be a **Unix epoch timestamp in seconds** (Number type).
+
+```python
+import time
+
+# Item expires in 24 hours from now
+expiry = int(time.time()) + 86400   # 86400 seconds = 24 hours
+
+table.put_item(Item={
+    'userId':    'user-001',
+    'itemId':    'session-xyz',
+    'token':     'abc123',
+    'expiresAt': expiry           # DynamoDB deletes this item automatically
+})
+```
+
+```bash
+# CLI example — set expiry 1 hour from now
+EXPIRY=$(( $(date +%s) + 3600 ))
+
+aws dynamodb put-item \
+  --table-name items \
+  --item "{
+    \"userId\":    {\"S\": \"user-001\"},
+    \"itemId\":    {\"S\": \"session-xyz\"},
+    \"expiresAt\": {\"N\": \"$EXPIRY\"}
+  }"
+```
+
+---
+
+**TTL behaviour — important details:**
+
+| Detail | What happens |
+| ------ | ------------ |
+| Deletion timing | DynamoDB deletes expired items within 48 hours (usually within minutes) |
+| Expired items in reads | May still appear in reads until physically deleted — filter them yourself if needed |
+| No RCU/WCU cost | TTL deletions do not consume table capacity |
+| Streams | TTL deletions appear in Streams as `REMOVE` events with `userIdentity.type = "Service"` |
+| Items without the TTL attribute | Never expire — TTL is opt-in per item |
+
+```python
+# Filter out expired items in your application code (defensive coding)
+import time
+
+def is_valid(item):
+    ttl = item.get('expiresAt')
+    return ttl is None or ttl > int(time.time())
+
+items = [i for i in response['Items'] if is_valid(i)]
+```
+
+---
+
+### Capacity Modes & Auto Scaling
+
+**Choose the right capacity mode before going to production.**
+
+```
+┌────────────────────────────────────────────────────────────────────────┐
+│              On-Demand vs Provisioned                                  │
+│                                                                        │
+│  On-Demand                          Provisioned                        │
+│  ──────────────────────────────     ──────────────────────────────     │
+│  • Pay per request                  • Set RCU + WCU in advance         │
+│  • No capacity planning needed      • Cheaper at predictable load      │
+│  • Scales instantly to any load     • Must manage capacity             │
+│  • ~5–7x more expensive per         • Bursting via burst bucket        │
+│    request at sustained high RPS    • Auto Scaling adjusts RCU/WCU     │
+│                                       automatically                    │
+│  Best for:                          Best for:                          │
+│  • New tables (unknown traffic)     • Steady, predictable workloads    │
+│  • Spiky / unpredictable traffic    • High-throughput, cost-sensitive  │
+│  • Dev / test environments          • Production at scale              │
+└────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+**Switch capacity mode via Console**
+
+DynamoDB → `items` → **Additional settings** → **Read/write capacity** → **Edit** → select mode → **Save changes**
+
+Or with CLI:
+
+```bash
+# Switch to Provisioned
+aws dynamodb update-table \
+  --table-name items \
+  --billing-mode PROVISIONED \
+  --provisioned-throughput ReadCapacityUnits=10,WriteCapacityUnits=5
+
+# Switch to On-Demand
+aws dynamodb update-table \
+  --table-name items \
+  --billing-mode PAY_PER_REQUEST
+```
+
+---
+
+**Configure Auto Scaling for Provisioned tables**
+
+Auto Scaling adjusts RCU and WCU based on your target utilisation target (default 70%).
+
+```bash
+# Register table as a scalable target (writes)
+aws application-autoscaling register-scalable-target \
+  --service-namespace dynamodb \
+  --resource-id "table/items" \
+  --scalable-dimension "dynamodb:table:WriteCapacityUnits" \
+  --min-capacity 5 \
+  --max-capacity 500
+
+# Create a target tracking scaling policy
+aws application-autoscaling put-scaling-policy \
+  --service-namespace dynamodb \
+  --resource-id "table/items" \
+  --scalable-dimension "dynamodb:table:WriteCapacityUnits" \
+  --policy-name "items-write-scaling" \
+  --policy-type TargetTrackingScaling \
+  --target-tracking-scaling-policy-configuration '{
+    "TargetValue": 70.0,
+    "PredefinedMetricSpecification": {
+      "PredefinedMetricType": "DynamoDBWriteCapacityUtilization"
+    }
+  }'
+```
+
+---
+
+**Capacity calculation — how to estimate RCU and WCU:**
+
+```
+RCU formula:
+  Strongly consistent reads:   ceil(item_size_KB / 4) × reads_per_second
+  Eventually consistent reads: ceil(item_size_KB / 4) × reads_per_second / 2
+
+WCU formula:
+  ceil(item_size_KB / 1) × writes_per_second
+
+Example:
+  Item size: 2 KB
+  100 strongly consistent reads/s  →  ceil(2/4) × 100 = 100 RCU
+  50 writes/s                      →  ceil(2/1) × 50  = 100 WCU
+```
+
+---
+
+### DynamoDB Security
+
+**HANDS-ON — Encrypt data, restrict access, and keep traffic inside AWS (10 min)**
+
+---
+
+**Encryption at rest**
+
+All DynamoDB tables are encrypted at rest by default using AWS owned keys. To use your own key:
+
+DynamoDB → `items` → **Additional settings** → **Encryption** → **Edit** → **AWS managed key** or **Customer managed key (CMK)**
+
+| Option | Cost | Use when |
+| ------ | ---- | -------- |
+| AWS owned key (default) | Free | Most use cases |
+| AWS managed key (`aws/dynamodb`) | KMS charges apply | Audit trail of key usage required |
+| Customer managed key (CMK) | KMS charges + key management | Compliance requirements; key rotation control |
+
+---
+
+**Fine-grained IAM access control**
+
+Restrict users or services to only their own items using IAM condition keys:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [{
+    "Effect": "Allow",
+    "Action": [
+      "dynamodb:GetItem",
+      "dynamodb:PutItem",
+      "dynamodb:UpdateItem",
+      "dynamodb:DeleteItem",
+      "dynamodb:Query"
+    ],
+    "Resource": "arn:aws:dynamodb:us-east-1:123456789012:table/items",
+    "Condition": {
+      "ForAllValues:StringEquals": {
+        "dynamodb:LeadingKeys": ["${aws:PrincipalTag/userId}"]
+      }
+    }
+  }]
+}
+```
+
+> `dynamodb:LeadingKeys` restricts access so each caller can only read/write items where the partition key matches their own identity. This prevents one user from accessing another user's data.
+
+---
+
+**VPC Endpoint — keep DynamoDB traffic off the public internet**
+
+```bash
+# Create a Gateway VPC Endpoint for DynamoDB (no hourly cost)
+aws ec2 create-vpc-endpoint \
+  --vpc-id vpc-0abc1234 \
+  --service-name com.amazonaws.us-east-1.dynamodb \
+  --route-table-ids rtb-0abc1234
+
+# Attach a VPC endpoint policy to restrict which tables can be accessed
+```
+
+After creating the endpoint, Lambda functions (and EC2 instances) in that VPC route DynamoDB traffic through AWS backbone — never over the internet.
+
+---
+
+**IAM role for Lambda accessing DynamoDB:**
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "dynamodb:GetItem",
+        "dynamodb:PutItem",
+        "dynamodb:UpdateItem",
+        "dynamodb:DeleteItem",
+        "dynamodb:Query",
+        "dynamodb:BatchWriteItem"
+      ],
+      "Resource": [
+        "arn:aws:dynamodb:us-east-1:123456789012:table/items",
+        "arn:aws:dynamodb:us-east-1:123456789012:table/items/index/*"
+      ]
+    }
+  ]
+}
+```
+
+> Always scope the `Resource` to the specific table and index ARNs — never use `*`.
+
+---
+
+### DynamoDB Best Practices
+
+**Category 1 — Key Design**
+
+| Rule | Why | How |
+| ---- | --- | --- |
+| Choose a high-cardinality partition key | Even data distribution prevents hot partitions | Use `userId`, `orderId`, `deviceId` — not `status` or `country` |
+| Design around access patterns, not entities | DynamoDB has no joins — model the read shape | List all queries before creating the table |
+| Use composite sort keys for hierarchy | Enables flexible range queries | `SK = ORDER#2024-01-15#ord-001` — filter by prefix with `begins_with` |
+| Add random suffixes to hot partition keys | Spreads write load across partitions | Append `#1` through `#10` suffix; aggregate on read |
+| Avoid large items | Each read/write of a large item consumes many RCU/WCU | Store blobs in S3; keep DynamoDB items under 10 KB |
+
+**Category 2 — Query Efficiency**
+
+| Rule | Why | How |
+| ---- | --- | --- |
+| Always use `Query` over `Scan` | Scan reads every item → wastes RCU at scale | Only use Scan for admin/analytics jobs, not application paths |
+| Use `ProjectionExpression` to fetch only needed attributes | Reduces data transfer and RCU for large items | `.query(..., ProjectionExpression='userId, name, price')` |
+| Use `FilterExpression` carefully | Does NOT reduce RCU — items are read then filtered | Pre-filter in key design; use a GSI for frequent filter patterns |
+| Paginate large result sets | `Query` returns max 1 MB per call | Check `LastEvaluatedKey`; loop with `ExclusiveStartKey` until `None` |
+| Enable DAX for read-heavy workloads | DynamoDB Accelerator = in-memory cache; microsecond reads | Attach DAX cluster; change endpoint in code — API is identical |
+
+**Category 3 — Reliability**
+
+| Rule | Why | How |
+| ---- | --- | --- |
+| Use conditional writes for optimistic locking | Prevents lost updates when two processes write the same item | `ConditionExpression='version = :v'`; increment version on each write |
+| Use transactions for multi-item atomicity | Guarantees all-or-nothing across up to 100 items | `transact_write_items` — up to 4 MB per transaction |
+| Enable Point-in-Time Recovery (PITR) | Restore the table to any second in the last 35 days | DynamoDB → Additional settings → Backups → Enable PITR |
+| Set a DLQ on Stream Lambda triggers | Catches batches that fail after max retries | Lambda trigger → Destination on failure → SQS ARN |
+| Monitor `SystemErrors` and `ThrottledRequests` | Silent failures compound | CloudWatch alarms on these metrics for every production table |
+
+**Category 4 — Cost**
+
+| Rule | Why | How |
+| ---- | --- | --- |
+| Use On-Demand only for unpredictable workloads | Provisioned is up to 7x cheaper at steady load | Switch to Provisioned + Auto Scaling once traffic is predictable |
+| Use TTL to delete expired data | Storage is billed by GB — stale data costs money | Set TTL on sessions, tokens, temp data |
+| Archive cold data to S3 | S3 is ~23x cheaper per GB than DynamoDB | Export old data with DynamoDB → Export to S3 (no RCU impact) |
+| Choose `KEYS_ONLY` or `INCLUDE` projection for GSIs | `ALL` projection doubles storage cost for each GSI | Only project attributes you actually query from the GSI |
+| Delete unused tables and GSIs | Empty tables still incur GSI storage costs | Audit monthly; drop tables not receiving traffic |
+
+---
+
+**Common interview questions:**
+
+| Question | Answer |
+| -------- | ------ |
+| What is the difference between a partition key and a sort key? | The partition key (hash key) determines which physical partition stores the item — it must be provided in all read/write operations. The sort key (range key) orders items within the same partition and enables range queries (`begins_with`, `between`, `<`, `>`). Together they form a composite primary key that uniquely identifies each item. |
+| Why is Scan bad in production? | Scan reads every item in the table regardless of what you need. This consumes RCU proportional to the total table size, is slow at scale, and does not scale linearly. Always design your keys and GSIs so you can use Query instead. |
+| What is a hot partition and how do you fix it? | A hot partition is a single DynamoDB partition receiving disproportionately more reads or writes than others, causing throttling. It occurs when the partition key has low cardinality (e.g. `status = "active"`) or a known write spike (e.g. a celebrity user). Fix it by choosing a higher-cardinality key, adding a random suffix to spread writes, or using write sharding. |
+| What is the difference between GSI and LSI? | A GSI has a different partition key from the table and can be added at any time — it supports queries across all items by non-primary-key attributes. An LSI shares the same partition key as the table but uses a different sort key — it must be created at table creation time and allows range queries within a single partition on a different attribute. |
+| How does DynamoDB handle transactions? | DynamoDB `TransactWriteItems` and `TransactGetItems` provide ACID semantics across up to 100 items (4 MB limit) within a single AWS account and region. Each item in the transaction is checked for conditions and written atomically — all succeed or all fail. Transactions consume 2× the normal RCU/WCU. |
+| What is the difference between eventually consistent and strongly consistent reads? | Eventually consistent reads (default) may return stale data up to ~1 second old and cost 0.5 RCU per 4 KB. Strongly consistent reads always return the latest committed data and cost 1 RCU per 4 KB. Use strongly consistent reads for financial data, inventory counts, or any scenario where stale data is unacceptable. |
+| How does DynamoDB Streams work with Lambda? | When Streams is enabled, every write (INSERT/MODIFY/REMOVE) is appended to an ordered shard log. Lambda reads batches of records via an event source mapping and invokes your function. The batch size, starting position, retry attempts, and failure destination are all configurable. Stream records are retained for 24 hours. |
+| How would you implement optimistic locking in DynamoDB? | Add a `version` (Number) attribute to each item. On read, note the current version. On write, use `ConditionExpression='version = :current_version'` and increment version in the `UpdateExpression`. If another process wrote between your read and write, the condition fails with `ConditionalCheckFailedException` — retry with fresh data. |
+
+---
+
+### Reference
+
+**Clean up resources (to avoid charges)**
+
+**Step 1 — Disable TTL**
+- DynamoDB → `items` → **Additional settings** → **Time to live (TTL)** → **Disable**
+
+**Step 2 — Delete GSIs**
+- DynamoDB → `items` → **Indexes** tab → select `category-createdAt-index` → **Delete index**
+
+**Step 3 — Delete the event source mapping (Stream trigger)**
+- Lambda → your function → **Configuration** → **Triggers** → select the DynamoDB trigger → **Delete**
+
+**Step 4 — Disable Streams**
+```bash
+aws dynamodb update-table \
+  --table-name items \
+  --stream-specification StreamEnabled=false
+```
+
+**Step 5 — Delete the table**
+- DynamoDB → **Tables** → select `items` → **Delete table** → confirm by typing `confirm` → **Delete**
+
+```bash
+# Or via CLI
+aws dynamodb delete-table --table-name items
+```
+
+**Step 6 — Delete CloudWatch Log Groups**
+- CloudWatch → **Log groups** → find `/aws/lambda/my-stream-processor` → **Actions** → **Delete log group(s)**
+
+**Verify:** DynamoDB → **Tables** — `items` no longer listed ✓
+
+---
+
+**Official documentation:**
+
+→ [Amazon DynamoDB — Developer Guide](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/Introduction.html)
+
+→ [DynamoDB Core Components](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/HowItWorks.CoreComponents.html)
+
+→ [Best Practices for Designing and Using Partition Keys](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/bp-partition-key-design.html)
+
+→ [Global Secondary Indexes](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/GSI.html)
+
+→ [DynamoDB Streams and AWS Lambda Triggers](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/Streams.Lambda.html)
+
+→ [DynamoDB Transactions](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/transactions.html)
+
+→ [Time to Live (TTL)](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/TTL.html)
+
+→ [DynamoDB Auto Scaling](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/AutoScaling.html)
 
 ---
 
